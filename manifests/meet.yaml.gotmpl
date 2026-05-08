@@ -15,11 +15,13 @@ resources:
       dnsNames:
         - {{ .StateValues.deploy.MEET_DOMAIN }}
 
-  # K8s-Secret mit Meet-UI-Credentials. Werte werden zur render-time aus
-  # secrets/meet.yaml.gotmpl (sops-encrypted) gemerged. WICHTIG: Derselbe
-  # API-Key + Secret muss zusaetzlich im storeKeysInSecret-Block des
-  # livekit-server-Releases vorhanden sein, sonst akzeptiert der LiveKit-
-  # Server die vom Meet-UI signierten Tokens nicht.
+  # K8s-Secret mit Meet-UI-Credentials + Allow-Liste. Werte werden zur
+  # render-time aus secrets/<env>/meet.yaml.gotmpl (sops-encrypted) gemerged.
+  # WICHTIG: API-Key + Secret muss zusaetzlich im storeKeysInSecret-Block
+  # des livekit-server-Releases vorhanden sein, sonst akzeptiert der
+  # LiveKit-Server die vom Meet-UI signierten Tokens nicht.
+  # ALLOWED_ROOMS_JSON enthaelt Klartext-Passwords der Raeume -- daher
+  # bewusst Secret, nicht ConfigMap.
   - apiVersion: v1
     kind: Secret
     metadata:
@@ -29,6 +31,7 @@ resources:
     stringData:
       LIVEKIT_API_KEY: {{ .StateValues.secrets.meet.LIVEKIT_API_KEY | quote }}
       LIVEKIT_API_SECRET: {{ .StateValues.secrets.meet.LIVEKIT_API_SECRET | quote }}
+      ALLOWED_ROOMS_JSON: {{ .StateValues.secrets.rooms | default (list) | toJson | quote }}
 
   - apiVersion: apps/v1
     kind: Deployment
@@ -47,6 +50,41 @@ resources:
           labels:
             app: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
         spec:
+          # Init-Container: erstellt die in ALLOWED_ROOMS_JSON definierten
+          # Raeume idempotent vor dem Meet-Start. Notwendig weil
+          # `room.auto_create: false` -- Server lehnt Connects in noch
+          # nicht existierende Raeume ab. Init laeuft bei jedem Pod-Restart
+          # und gleicht Cluster-State an die Config an.
+          initContainers:
+            - name: init-rooms
+              image: {{ .StateValues.meet.IMAGE }}:{{ .StateValues.meet.IMAGE_TAG }}
+              imagePullPolicy: {{ .StateValues.meet.IMAGE_PULL_POLICY }}
+              command: ["node", "/app/init-rooms/index.js"]
+              env:
+                - name: LIVEKIT_URL
+                  value: wss://{{ .StateValues.deploy.LIVEKIT_DOMAIN }}
+                - name: LIVEKIT_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: meet-livekit-credentials
+                      key: LIVEKIT_API_KEY
+                - name: LIVEKIT_API_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: meet-livekit-credentials
+                      key: LIVEKIT_API_SECRET
+                - name: ALLOWED_ROOMS_JSON
+                  valueFrom:
+                    secretKeyRef:
+                      name: meet-livekit-credentials
+                      key: ALLOWED_ROOMS_JSON
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
           containers:
             - name: meet
               image: {{ .StateValues.meet.IMAGE }}:{{ .StateValues.meet.IMAGE_TAG }}
@@ -70,6 +108,11 @@ resources:
                     secretKeyRef:
                       name: meet-livekit-credentials
                       key: LIVEKIT_API_SECRET
+                - name: ALLOWED_ROOMS_JSON
+                  valueFrom:
+                    secretKeyRef:
+                      name: meet-livekit-credentials
+                      key: ALLOWED_ROOMS_JSON
               readinessProbe:
                 httpGet:
                   path: /

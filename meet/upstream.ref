@@ -4,4 +4,4 @@
 #
 # Erlaubt sind: Tags, Branch-Namen, Commit-SHAs.
 # Empfehlung: fuer reproduzierbare Builds einen Commit-SHA pinnen.
-main
+6da2b8eb649e815b8886a01aeafd7d23c489152b

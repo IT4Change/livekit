@@ -1,7 +1,14 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage Build fuer livekit-examples/meet (Next.js 15, pnpm).
+# Multi-stage Build fuer livekit-examples/meet (Next.js 15, pnpm) + IT4C-Branding.
 # Quellcode liegt unter ./upstream/ -- lokal via sync-upstream.sh erzeugt,
 # im CI via zweitem actions/checkout (siehe build-meet.yml).
+#
+# Overrides unter ./overrides/ ersetzen UI-Routen vor dem build:
+#   - app/api/connection-details/route.ts -> Allow-List + Password-Check
+#   - app/api/rooms/route.ts              -> public-meta Liste fuer Landing
+#   - app/page.tsx                        -> Raum-Liste statt Random-Room-Demo
+# Logo aus ./assets/ wird ins public/ gelegt; Init-Container-Script aus
+# ./init-rooms/ wird ins Runtime-Image gelegt.
 #
 # WICHTIG: Keine Build-Args fuer LIVEKIT_API_KEY/SECRET. Das Image ist public,
 # Secrets kommen ausschliesslich als Runtime-ENV aus dem K8s-Secret in den Pod.
@@ -17,6 +24,13 @@ WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY upstream/ ./
+# IT4C-Overrides anwenden BEVOR gebaut wird.
+COPY overrides/route.ts ./app/api/connection-details/route.ts
+RUN mkdir -p ./app/api/rooms
+COPY overrides/api-rooms-route.ts ./app/api/rooms/route.ts
+COPY overrides/page.tsx ./app/page.tsx
+# Logo ins Next.js public/.
+COPY assets/it4c-logo.png ./public/it4c-logo.png
 RUN pnpm build
 
 FROM node:20-alpine AS runtime
@@ -32,6 +46,10 @@ COPY --from=build --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=build --chown=nextjs:nodejs /app/node_modules ./node_modules
+
+# Init-Container-Script (gleicher Image-Tag wird als Init nochmal genutzt,
+# Command dann: `node /app/init-rooms/index.js`).
+COPY --chown=nextjs:nodejs init-rooms/ ./init-rooms/
 
 USER nextjs
 EXPOSE 3000

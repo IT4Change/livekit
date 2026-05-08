@@ -34,10 +34,11 @@ livekit:
   # (auch mit auto_create) -- ist erst ab spaeteren Tags konsistent. v1.11.0
   # = aktueller stable.
   IMAGE_TAG: v1.11.0
-  # Auto-Create im Staging an, damit das Meet-UI ohne expliziten createRoom-
-  # Call Raeume aufmachen kann (Test-Workflow). Prod laesst das aus, dort
-  # legt das ocelot-Backend Rooms explizit an.
-  AUTO_CREATE_ROOM: true
+  # Auto-Create AUS: nur die in secrets.rooms definierten Raeume werden
+  # vom Init-Container des Meet-Pods pre-created. Damit kann niemand
+  # ueber URL-Manipulation neue Raeume aufmachen -- nur die Allow-Liste
+  # ist erreichbar.
+  AUTO_CREATE_ROOM: false
 
 redis:
   # true = Bitnami-Redis im LiveKit-NS deployen
