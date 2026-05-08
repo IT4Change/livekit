@@ -31,6 +31,9 @@ COPY overrides/api-rooms-route.ts ./app/api/rooms/route.ts
 COPY overrides/page.tsx ./app/page.tsx
 # Logo ins Next.js public/.
 COPY assets/it4c-logo.png ./public/it4c-logo.png
+# Surgischer Patch: Password-URL-Param an /api/connection-details forwarden.
+COPY scripts/patch-pageclient.js /tmp/it4c-patch-pageclient.js
+RUN node /tmp/it4c-patch-pageclient.js
 RUN pnpm build
 
 FROM node:20-alpine AS runtime

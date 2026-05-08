@@ -1,14 +1,16 @@
 // IT4C Meet -- Landing Page
 //
 // Override fuer livekit-examples/meet/app/page.tsx.
-// Statt Demo-Random-Room-Generator: Liste der erlaubten Raeume (aus
-// /api/rooms, server-side aus ALLOWED_ROOMS_JSON gefiltert -- niemals
-// Klartext-Password ans Frontend; Teilnehmerzahl vom LiveKit-Server).
+// Liste der erlaubten Raeume aus /api/rooms (server-side aus
+// ALLOWED_ROOMS_JSON gefiltert; niemals Klartext-Password ans Frontend).
 //
-// Klick auf "Beitreten" -> Standard-Pre-Join-Page von livekit-examples/meet
-// (`/rooms/<name>`). Dort wird Name + Mic/Cam abgefragt.
-//
-// Polling alle 5s damit Teilnehmerzahl annaehernd live aussieht.
+// Klick "Beitreten":
+//   - Raum ohne Passwort -> direkter Push zu /rooms/<name>
+//   - Raum mit Passwort  -> inline Form, Pre-Flight gegen
+//     /api/connection-details validiert, dann Push zu /rooms/<name>?password=...
+//     Der Pre-Join-Screen liest das Password aus dem URL-Param und reicht es
+//     beim Token-Holen mit (Patch in PageClientImpl.tsx, siehe
+//     meet/scripts/patch-pageclient.js).
 
 'use client';
 
@@ -25,44 +27,161 @@ type PublicRoom = {
 
 const POLL_INTERVAL_MS = 5_000;
 
-function RoomRow({ room }: { room: PublicRoom }) {
+function PasswordForm({
+  room,
+  onCancel,
+}: {
+  room: PublicRoom;
+  onCancel: () => void;
+}) {
   const router = useRouter();
-  const onJoin = () => router.push(`/rooms/${encodeURIComponent(room.name)}`);
-  const count = room.numParticipants ?? 0;
+  const [pwd, setPwd] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onSubmit: React.FormEventHandler<HTMLFormElement> = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      // Pre-Flight: validiert das Passwort serverseitig, bevor der Pre-Join-
+      // Screen geladen wird. participantName ist Platzhalter -- der Token
+      // wird im Pre-Join nochmal mit echtem Namen geholt.
+      const params = new URLSearchParams({
+        roomName: room.name,
+        participantName: '__pre_check__',
+        password: pwd,
+      });
+      const res = await fetch(`/api/connection-details?${params.toString()}`);
+      if (res.status === 403) {
+        setError('Falsches Passwort');
+        return;
+      }
+      if (!res.ok) {
+        setError(`Fehler: ${res.status}`);
+        return;
+      }
+      const target = new URLSearchParams({ password: pwd });
+      router.push(`/rooms/${encodeURIComponent(room.name)}?${target.toString()}`);
+    } catch {
+      setError('Verbindungsfehler');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <div
+    <form
+      onSubmit={onSubmit}
       style={{
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '1rem',
+        flexDirection: 'column',
+        gap: '0.5rem',
         padding: '0.75rem 1rem',
+        marginTop: '-0.5rem',
         border: '1px solid rgba(255,255,255,0.15)',
-        borderRadius: '8px',
-        background: 'rgba(255,255,255,0.03)',
+        borderTop: 'none',
+        borderRadius: '0 0 8px 8px',
+        background: 'rgba(255,255,255,0.05)',
       }}
     >
-      <span style={{ fontWeight: 600, flex: '1 1 auto' }}>
-        {room.displayName ?? room.name}
-        {room.hasPassword && (
-          <span style={{ marginLeft: '0.5rem', opacity: 0.7, fontSize: '0.85em' }}>🔒</span>
-        )}
-      </span>
-      <span
+      <input
+        type="password"
+        value={pwd}
+        onChange={(e) => setPwd(e.target.value)}
+        placeholder="Raum-Passwort"
+        autoFocus
+        required
+        disabled={busy}
+      />
+      {error && (
+        <p style={{ color: '#f55', margin: 0, fontSize: '0.85rem' }}>{error}</p>
+      )}
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button className="lk-button" type="submit" disabled={busy}>
+          {busy ? 'Pruefe ...' : 'Beitreten'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(255,255,255,0.2)',
+            color: 'inherit',
+            padding: '0.5rem 1rem',
+            borderRadius: '4px',
+            cursor: 'pointer',
+          }}
+        >
+          Abbrechen
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function RoomRow({ room }: { room: PublicRoom }) {
+  const router = useRouter();
+  const [showPwdForm, setShowPwdForm] = useState(false);
+  const count = room.numParticipants ?? 0;
+
+  const onJoin = () => {
+    if (room.hasPassword) {
+      setShowPwdForm(true);
+      return;
+    }
+    router.push(`/rooms/${encodeURIComponent(room.name)}`);
+  };
+
+  return (
+    <div>
+      <div
         style={{
-          opacity: 0.8,
-          minWidth: '4.5rem',
-          textAlign: 'right',
-          fontVariantNumeric: 'tabular-nums',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '1rem',
+          padding: '0.75rem 1rem',
+          border: '1px solid rgba(255,255,255,0.15)',
+          borderRadius: showPwdForm ? '8px 8px 0 0' : '8px',
+          background: 'rgba(255,255,255,0.03)',
         }}
-        title="Aktive Teilnehmer"
       >
-        👥 {count}
-      </span>
-      <button className="lk-button" onClick={onJoin} style={{ paddingInline: '1.25rem' }}>
-        Beitreten
-      </button>
+        <span style={{ fontWeight: 600, flex: '1 1 auto' }}>
+          {room.displayName ?? room.name}
+          {room.hasPassword && (
+            <span
+              style={{ marginLeft: '0.5rem', opacity: 0.7, fontSize: '0.85em' }}
+              title="Passwort-geschuetzt"
+            >
+              🔒
+            </span>
+          )}
+        </span>
+        <span
+          style={{
+            opacity: 0.8,
+            minWidth: '4.5rem',
+            textAlign: 'right',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+          title="Aktive Teilnehmer"
+        >
+          👥 {count}
+        </span>
+        <button
+          className="lk-button"
+          onClick={onJoin}
+          disabled={showPwdForm}
+          style={{ paddingInline: '1.25rem' }}
+        >
+          Beitreten
+        </button>
+      </div>
+      {showPwdForm && (
+        <PasswordForm room={room} onCancel={() => setShowPwdForm(false)} />
+      )}
     </div>
   );
 }
