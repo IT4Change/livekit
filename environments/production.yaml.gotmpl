@@ -19,10 +19,9 @@ livekit:
   RTC_TCP_PORT: 7881
   USE_EXTERNAL_IP: true
   PROMETHEUS_ENABLED: true
-  # Prod: Auto-Create aus -- Backend (ocelot) legt Rooms explizit an.
-  AUTO_CREATE_ROOM: false
+  AUTO_CREATE_ROOM: true
   # Prod: Tag muss explizit gepinnt sein vor jedem Sync.
-  IMAGE_TAG: ""
+  IMAGE_TAG: v1.11.0
 
 redis:
   MANAGED: true
@@ -33,6 +32,6 @@ meet:
   IMAGE: ghcr.io/it4change/livekit/meet
   # Prod: Tag muss vor jedem Sync explizit auf einen sha-<short> oder vTag
   # gepinnt werden -- "latest" ist absichtlich nicht erlaubt.
-  IMAGE_TAG: ""
+  IMAGE_TAG: sha-e43f923
   IMAGE_PULL_POLICY: IfNotPresent
   REPLICA_COUNT: 2
