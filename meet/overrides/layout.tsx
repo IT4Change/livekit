@@ -13,6 +13,7 @@ import '@livekit/components-styles';
 import '@livekit/components-styles/prefabs';
 import type { Metadata, Viewport } from 'next';
 import { Toaster } from 'react-hot-toast';
+import { CookieGate } from './CookieGate';
 
 const SITE_URL = process.env.SITE_URL ?? 'https://meet.stage.it4c.org';
 const SITE_NAME = 'IT4C Meet';
@@ -61,7 +62,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="de">
       <body data-lk-theme="default">
         <Toaster />
-        {children}
+        <CookieGate>{children}</CookieGate>
       </body>
     </html>
   );

@@ -10,12 +10,20 @@
 const { RoomServiceClient } = require('livekit-server-sdk');
 
 const ALLOWED_ROOMS_JSON = process.env.ALLOWED_ROOMS_JSON ?? '[]';
+// Bevorzugt der Cluster-interne Service-URL (vermeidet Hairpin-NAT-Probleme,
+// kein TLS-Roundtrip noetig). Fallback auf die public LIVEKIT_URL wenn die
+// interne nicht gesetzt ist.
+const LIVEKIT_INTERNAL_URL = process.env.LIVEKIT_INTERNAL_URL;
 const LIVEKIT_URL = process.env.LIVEKIT_URL;
 const API_KEY = process.env.LIVEKIT_API_KEY;
 const API_SECRET = process.env.LIVEKIT_API_SECRET;
 
-if (!LIVEKIT_URL || !API_KEY || !API_SECRET) {
-  console.error('LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET required');
+if (!API_KEY || !API_SECRET) {
+  console.error('LIVEKIT_API_KEY / LIVEKIT_API_SECRET required');
+  process.exit(1);
+}
+if (!LIVEKIT_INTERNAL_URL && !LIVEKIT_URL) {
+  console.error('LIVEKIT_INTERNAL_URL or LIVEKIT_URL required');
   process.exit(1);
 }
 
@@ -46,11 +54,13 @@ async function main() {
     process.exit(1);
   }
 
-  // RoomServiceClient nutzt REST/twirp -- braucht HTTPS, nicht WSS.
-  const httpsUrl = LIVEKIT_URL.replace(/^wss?:/, 'https:');
-  const svc = new RoomServiceClient(httpsUrl, API_KEY, API_SECRET);
+  // RoomServiceClient nutzt REST/twirp. Interne Cluster-URL bevorzugen
+  // (HTTP ueber Service-DNS), Fallback: public LIVEKIT_URL als HTTPS.
+  const targetUrl =
+    LIVEKIT_INTERNAL_URL ?? LIVEKIT_URL.replace(/^wss?:/, 'https:');
+  const svc = new RoomServiceClient(targetUrl, API_KEY, API_SECRET);
 
-  console.log(`Connecting to ${httpsUrl}`);
+  console.log(`Connecting to ${targetUrl}`);
   const existingRooms = await withRetry('listRooms', () => svc.listRooms());
   const existing = new Set(existingRooms.map((r) => r.name));
   console.log(`Existing rooms on server: ${[...existing].join(', ') || '(none)'}`);

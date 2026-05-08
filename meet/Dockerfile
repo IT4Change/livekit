@@ -30,6 +30,7 @@ RUN mkdir -p ./app/api/rooms
 COPY overrides/api-rooms-route.ts ./app/api/rooms/route.ts
 COPY overrides/page.tsx ./app/page.tsx
 COPY overrides/layout.tsx ./app/layout.tsx
+COPY overrides/CookieGate.tsx ./app/CookieGate.tsx
 COPY overrides/rooms-page.tsx ./app/rooms/[roomName]/page.tsx
 # Logo ins Next.js public/.
 COPY assets/it4c-logo.png ./public/it4c-logo.png

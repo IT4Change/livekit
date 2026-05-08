@@ -61,6 +61,11 @@ resources:
               imagePullPolicy: {{ .StateValues.meet.IMAGE_PULL_POLICY }}
               command: ["node", "/app/init-rooms/index.js"]
               env:
+                # Cluster-interne URL fuer createRoom-Calls -- vermeidet
+                # Hairpin-NAT (Pod -> Public-IP -> eigener Cluster), das in
+                # vielen K8s-Setups blockiert ist.
+                - name: LIVEKIT_INTERNAL_URL
+                  value: http://{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}.{{ .StateValues.deploy.NAMESPACE }}.svc.cluster.local:80
                 - name: LIVEKIT_URL
                   value: wss://{{ .StateValues.deploy.LIVEKIT_DOMAIN }}
                 - name: LIVEKIT_API_KEY
