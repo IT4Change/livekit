@@ -1,11 +1,16 @@
 // IT4C Meet -- Landing Page
 //
 // Override fuer livekit-examples/meet/app/page.tsx.
-// Statt Demo-Random-Room-Generator: Liste der erlaubten Raeume (aus ALLOWED_ROOMS_JSON,
-// vom Server-Side gerendered, public-meta-only). Bei Raum mit Password: Eingabefeld.
+// Statt Demo-Random-Room-Generator: Liste der erlaubten Raeume (aus
+// /api/rooms, server-side aus ALLOWED_ROOMS_JSON gefiltert -- niemals
+// Klartext-Password ans Frontend).
 //
-// "Hosted on LiveKit Cloud" und Upstream-GitHub-Link sind raus -- dafuer Verweis
-// auf das eigene IT4Change/livekit Repo.
+// Klick auf "Beitreten" -> Redirect zur Standard-Pre-Join-Page von
+// livekit-examples/meet (`/rooms/<name>`). Dort wird Name + Mic/Cam
+// abgefragt. Hier kein Name -- waere doppelt.
+//
+// "Hosted on LiveKit Cloud" und Upstream-GitHub-Link sind raus -- Verweis
+// stattdessen auf das eigene IT4Change/livekit Repo.
 
 'use client';
 
@@ -19,77 +24,29 @@ type PublicRoom = {
   hasPassword?: boolean;
 };
 
-function JoinRoomCard({ room }: { room: PublicRoom }) {
+function RoomCard({ room }: { room: PublicRoom }) {
   const router = useRouter();
-  const [name, setName] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const onSubmit: React.FormEventHandler<HTMLFormElement> = async (e) => {
-    e.preventDefault();
-    setError(null);
-
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError('Bitte einen Namen eingeben');
-      return;
-    }
-
-    // Pre-flight gegen die API, um Password sofort zu validieren -- erspart
-    // dem Nutzer die Reise durch das Pre-Join-Screen falls falsch.
-    try {
-      const params = new URLSearchParams({
-        roomName: room.name,
-        participantName: trimmed,
-      });
-      if (room.hasPassword) params.set('password', password);
-      const res = await fetch(`/api/connection-details?${params.toString()}`);
-      if (res.status === 403) {
-        setError(room.hasPassword ? 'Falsches Passwort' : 'Raum nicht freigegeben');
-        return;
-      }
-      if (!res.ok) {
-        setError(`Fehler: ${res.status}`);
-        return;
-      }
-    } catch {
-      setError('Verbindungsfehler');
-      return;
-    }
-
-    // Connection-Details-API hat OK gesagt -- Browser zur Raum-Page leiten.
-    // Die Room-Page wird die API selbst nochmal rufen (mit denselben Params)
-    // und dann den WSS-Connect machen.
-    const target = new URLSearchParams();
-    target.set('participantName', trimmed);
-    if (room.hasPassword) target.set('password', password);
-    router.push(`/rooms/${encodeURIComponent(room.name)}?${target.toString()}`);
+  const onJoin = () => {
+    // Standard-Pre-Join-Page von livekit-examples/meet uebernimmt
+    // Name- und Mic/Cam-Setup.
+    router.push(`/rooms/${encodeURIComponent(room.name)}`);
   };
 
   return (
-    <form className={styles.tabContent} onSubmit={onSubmit} style={{ minWidth: '20rem' }}>
+    <div
+      className={styles.tabContent}
+      style={{ minWidth: '14rem', alignItems: 'center', textAlign: 'center' }}
+    >
       <h3 style={{ margin: 0 }}>{room.displayName ?? room.name}</h3>
-      <input
-        type="text"
-        placeholder="Dein Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        required
-      />
       {room.hasPassword && (
-        <input
-          type="password"
-          placeholder="Raum-Passwort"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
+        <p style={{ margin: 0, fontSize: '0.85rem', opacity: 0.7 }}>
+          🔒 Passwort-geschuetzt
+        </p>
       )}
-      {error && <p style={{ color: '#f55', margin: 0 }}>{error}</p>}
-      <button className="lk-button" type="submit">
+      <button className="lk-button" onClick={onJoin} style={{ paddingInline: '1.5rem' }}>
         Beitreten
       </button>
-    </form>
+    </div>
   );
 }
 
@@ -139,7 +96,7 @@ export default function Page() {
             }}
           >
             {rooms.map((room) => (
-              <JoinRoomCard key={room.name} room={room} />
+              <RoomCard key={room.name} room={room} />
             ))}
           </div>
         )}
