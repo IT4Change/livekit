@@ -2,6 +2,7 @@ deploy:
   NAMESPACE: livekit
   RELEASE_NAME_LIVEKIT: livekit-server
   RELEASE_NAME_REDIS: redis
+  RELEASE_NAME_MEET: livekit-meet
   REPLICA_COUNT: 2
   LIVEKIT_DOMAIN: livekit.it4c.dev
   LIVEKIT_TLS_SECRET_NAME: livekit-it4c-dev-tls
@@ -18,7 +19,18 @@ livekit:
   RTC_TCP_PORT: 7881
   USE_EXTERNAL_IP: true
   PROMETHEUS_ENABLED: true
+  # Prod: Auto-Create aus -- Backend (ocelot) legt Rooms explizit an.
+  AUTO_CREATE_ROOM: false
 
 redis:
   MANAGED: true
   EXTERNAL_ADDRESS: ""
+
+meet:
+  MANAGED: true
+  IMAGE: ghcr.io/it4change/livekit/meet
+  # Prod: Tag muss vor jedem Sync explizit auf einen sha-<short> oder vTag
+  # gepinnt werden -- "latest" ist absichtlich nicht erlaubt.
+  IMAGE_TAG: ""
+  IMAGE_PULL_POLICY: IfNotPresent
+  REPLICA_COUNT: 2

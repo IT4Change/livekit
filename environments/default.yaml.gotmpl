@@ -2,6 +2,7 @@ deploy:
   NAMESPACE: livekit-staging
   RELEASE_NAME_LIVEKIT: livekit-server
   RELEASE_NAME_REDIS: redis
+  RELEASE_NAME_MEET: livekit-meet
   REPLICA_COUNT: 1
   # LiveKit-Server (Signaling + RTC) -- Subdomain getrennt vom Meet-UI, damit
   # beide unabhaengig deployed/rotiert werden koennen.
@@ -27,9 +28,22 @@ livekit:
   # auf false und LIVEKIT_NODE_IP per Env auf die LB-IP setzen.
   USE_EXTERNAL_IP: true
   PROMETHEUS_ENABLED: true
+  # Auto-Create im Staging an, damit das Meet-UI ohne expliziten createRoom-
+  # Call Raeume aufmachen kann (Test-Workflow). Prod laesst das aus, dort
+  # legt das ocelot-Backend Rooms explizit an.
+  AUTO_CREATE_ROOM: true
 
 redis:
   # true = Bitnami-Redis im LiveKit-NS deployen
   # false = externe Redis (EXTERNAL_ADDRESS muss gesetzt sein)
   MANAGED: true
   EXTERNAL_ADDRESS: ""
+
+meet:
+  # true = Meet-UI als Standalone-Release mitdeployen
+  # false = nur LiveKit-Server (ocelot bringt sein eigenes Frontend mit)
+  MANAGED: true
+  IMAGE: ghcr.io/it4change/livekit/meet
+  IMAGE_TAG: latest
+  IMAGE_PULL_POLICY: Always
+  REPLICA_COUNT: 1

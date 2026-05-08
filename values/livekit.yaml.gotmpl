@@ -35,10 +35,12 @@ livekit:
     tcp_port: {{ .StateValues.livekit.RTC_TCP_PORT }}
     udp_port: {{ .StateValues.livekit.RTC_UDP_PORT }}
 
-  # Multi-Tenancy: Auto-Create deaktiviert, das ocelot-Backend legt Rooms
-  # explizit per RoomServiceClient.createRoom() an.
+  # Multi-Tenancy: Auto-Create per env steuerbar. Prod = false (ocelot-
+  # Backend legt Rooms explizit per RoomServiceClient.createRoom() an).
+  # Staging = true, damit das Meet-UI ohne Backend-Call Raeume aufmachen
+  # kann.
   room:
-    auto_create: false
+    auto_create: {{ .StateValues.livekit.AUTO_CREATE_ROOM }}
     empty_timeout: 300
     departure_timeout: 20
 

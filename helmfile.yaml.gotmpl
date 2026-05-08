@@ -5,11 +5,17 @@ environments:
       - ./environments/default.yaml.gotmpl
     secrets:
       - ./environments/default.secrets.yaml
+      # Meet-Credentials liegen auf env-Level, nicht release-level: das
+      # bedag/raw-Chart kann keine Secret-Werte aus Helm-Values rendern
+      # (kein eigenes Template), daher muessen die Werte zur values-File-
+      # Render-Zeit als .StateValues.secrets.meet.* verfuegbar sein.
+      - ./secrets/default/meet.yaml.gotmpl
   production:
     values:
       - ./environments/production.yaml.gotmpl
     secrets:
       - ./environments/production.secrets.yaml
+      - ./secrets/production/meet.yaml.gotmpl
 ---
 repositories:
   - name: livekit
@@ -42,7 +48,7 @@ releases:
     values:
       - ./values/livekit.yaml.gotmpl
     secrets:
-      - ./secrets/livekit.yaml.gotmpl
+      - ./secrets/{{ .Environment.Name }}/livekit.yaml.gotmpl
 
   - name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-ingress
     namespace: {{ .StateValues.deploy.NAMESPACE }}
@@ -52,3 +58,19 @@ releases:
       - {{ .StateValues.deploy.NAMESPACE }}/{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
     values:
       - ./manifests/ingressroute.yaml.gotmpl
+
+  {{- if eq .StateValues.meet.MANAGED true }}
+  # Default-Conferencing-Frontend (livekit-examples/meet) als Standalone-UI.
+  # Image wird aus IT4Change/livekit gebaut (siehe meet/ + .github/workflows).
+  # Braucht den Issuer aus dem -ingress Release fuer das Meet-Cert.
+  # Secrets liegen auf env-Level (siehe environments.<env>.secrets oben), das
+  # Manifest greift sie als .StateValues.secrets.meet.* ab.
+  - name: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+    namespace: {{ .StateValues.deploy.NAMESPACE }}
+    chart: bedag/raw
+    version: 2.0.0
+    needs:
+      - {{ .StateValues.deploy.NAMESPACE }}/{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-ingress
+    values:
+      - ./manifests/meet.yaml.gotmpl
+  {{- end }}

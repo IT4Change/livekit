@@ -1,0 +1,123 @@
+resources:
+  # Certificate fuer das Meet-UI auf MEET_DOMAIN. Reuse des Issuers, der vom
+  # livekit-server-ingress Release im selben Namespace angelegt wird --
+  # daher braucht der Meet-Release diesen als helmfile-Dependency.
+  - apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: meet-tls
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+    spec:
+      secretName: {{ .StateValues.deploy.MEET_TLS_SECRET_NAME }}
+      issuerRef:
+        name: livekit-{{ .StateValues.deploy.ACME_ISSUER }}
+        kind: Issuer
+      dnsNames:
+        - {{ .StateValues.deploy.MEET_DOMAIN }}
+
+  # K8s-Secret mit Meet-UI-Credentials. Werte werden zur render-time aus
+  # secrets/meet.yaml.gotmpl (sops-encrypted) gemerged. WICHTIG: Derselbe
+  # API-Key + Secret muss zusaetzlich im storeKeysInSecret-Block des
+  # livekit-server-Releases vorhanden sein, sonst akzeptiert der LiveKit-
+  # Server die vom Meet-UI signierten Tokens nicht.
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: meet-livekit-credentials
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+    type: Opaque
+    stringData:
+      LIVEKIT_API_KEY: {{ .StateValues.secrets.meet.LIVEKIT_API_KEY | quote }}
+      LIVEKIT_API_SECRET: {{ .StateValues.secrets.meet.LIVEKIT_API_SECRET | quote }}
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        app: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+    spec:
+      replicas: {{ .StateValues.meet.REPLICA_COUNT }}
+      selector:
+        matchLabels:
+          app: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+      template:
+        metadata:
+          labels:
+            app: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+        spec:
+          containers:
+            - name: meet
+              image: {{ .StateValues.meet.IMAGE }}:{{ .StateValues.meet.IMAGE_TAG }}
+              imagePullPolicy: {{ .StateValues.meet.IMAGE_PULL_POLICY }}
+              ports:
+                - containerPort: 3000
+                  name: http
+              env:
+                # Default-LiveKit-URL fuer Browser-Clients. Meet-UI rendert
+                # diese serverseitig in die HTML-Page; Clients connecten dann
+                # direkt zum Signaling.
+                - name: LIVEKIT_URL
+                  value: wss://{{ .StateValues.deploy.LIVEKIT_DOMAIN }}
+                - name: LIVEKIT_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: meet-livekit-credentials
+                      key: LIVEKIT_API_KEY
+                - name: LIVEKIT_API_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: meet-livekit-credentials
+                      key: LIVEKIT_API_SECRET
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: http
+                initialDelaySeconds: 10
+                periodSeconds: 10
+              livenessProbe:
+                httpGet:
+                  path: /
+                  port: http
+                initialDelaySeconds: 30
+                periodSeconds: 30
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+    spec:
+      type: ClusterIP
+      selector:
+        app: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+      ports:
+        - port: 80
+          targetPort: 3000
+          name: http
+
+  # Traefik IngressRoute: TLS-Termination auf 443 -> Service:80 -> Pod:3000.
+  - apiVersion: {{ .StateValues.traefik.API_VERSION }}
+    kind: IngressRoute
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+    spec:
+      entryPoints:
+        - {{ .StateValues.traefik.ENTRYPOINT }}
+      routes:
+        - match: Host(`{{ .StateValues.deploy.MEET_DOMAIN }}`)
+          kind: Rule
+          services:
+            - name: {{ .StateValues.deploy.RELEASE_NAME_MEET }}
+              port: 80
+      tls:
+        secretName: {{ .StateValues.deploy.MEET_TLS_SECRET_NAME }}

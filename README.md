@@ -17,11 +17,17 @@ deploy/
   values/
     livekit.yaml.gotmpl                 # Chart-Values livekit-server
   secrets/
-    livekit.yaml.gotmpl.example         # Vorlage; sops-encrypted committen
     .gitignore                          # Klartext-Secrets nicht committen
+    default/                            # Stage-Keys (sops-encrypted)
+      livekit.yaml.gotmpl.example
+      meet.yaml.gotmpl.example
+    production/                         # Prod-Keys (sops-encrypted)
+      livekit.yaml.gotmpl.example
+      meet.yaml.gotmpl.example
   manifests/
     redis.yaml.gotmpl                   # Vanilla Redis (StatefulSet + Service)
     ingressroute.yaml.gotmpl            # Issuer + Certificate + IngressRoute
+    meet.yaml.gotmpl                    # Cert + Secret + Deployment + IngressRoute (Meet-UI)
 ```
 
 Redis laeuft als minimales `redis:7-alpine` StatefulSet ueber den `bedag/raw`-
@@ -45,8 +51,11 @@ neue Chart-Pull haette sonst `ErrImagePull`.
 
 ## Erst-Setup
 
+Beispiel hier: env `default` (Staging). Fuer `production` analog mit
+`secrets/production/...` und `helmfile -e production ...`.
+
 ```sh
-cd projects/VideoChat-LiveKit/deploy
+cd livekit/
 
 # 1. Namespace
 kubectl create namespace livekit-staging
@@ -56,14 +65,25 @@ cp environments/default.secrets.yaml.example environments/default.secrets.yaml
 $EDITOR environments/default.secrets.yaml
 sops -e -i environments/default.secrets.yaml
 
-# 3. Release-Secret (API-Keys) anlegen + verschluesseln
-cp secrets/livekit.yaml.gotmpl.example secrets/livekit.yaml.gotmpl
-$EDITOR secrets/livekit.yaml.gotmpl
-sops -e -i secrets/livekit.yaml.gotmpl
+# 3a. Release-Secret livekit (API-Keys fuer ocelot UND Meet-UI) anlegen.
+#     Wird vom livekit-server Helm-Chart selbst zu einem K8s-Secret gerendert.
+cp secrets/default/livekit.yaml.gotmpl.example secrets/default/livekit.yaml.gotmpl
+$EDITOR secrets/default/livekit.yaml.gotmpl
+sops -e -i secrets/default/livekit.yaml.gotmpl
 
-# 4. DNS pruefen -- livekit.stage.it4c.org muss vor dem Sync schon zeigen,
-#    sonst kann cert-manager keine HTTP-01 Challenge loesen.
-dig +short livekit.stage.it4c.org
+# 3b. Env-Level-Secret meet (Credentials, mit denen das Meet-UI Tokens signiert).
+#     Wird im Manifest als .StateValues.secrets.meet.* ausgelesen -- bedag/raw
+#     kann selbst keine Secret-Werte rendern, daher env-level statt release-level.
+cp secrets/default/meet.yaml.gotmpl.example secrets/default/meet.yaml.gotmpl
+$EDITOR secrets/default/meet.yaml.gotmpl
+sops -e -i secrets/default/meet.yaml.gotmpl
+# WICHTIG: Den Meet-API-Key aus 3b zusaetzlich in 3a unter
+# storeKeysInSecret.keys eintragen, sonst akzeptiert der LiveKit-Server
+# die vom Meet-UI signierten Tokens nicht.
+
+# 4. DNS pruefen -- livekit.stage.it4c.org und meet.stage.it4c.org muessen
+#    vor dem Sync schon zeigen, sonst scheitert die HTTP-01-Challenge.
+dig +short livekit.stage.it4c.org meet.stage.it4c.org
 
 # 5. Helm-Repos pullen
 helmfile -e default deps
@@ -164,4 +184,4 @@ Release `livekit-egress` (Chart `livekit/egress`) plus MinIO oder externer S3.
 - **Cert-Issuance haengt**: HTTP-01 braucht Port 80 erreichbar. `kubectl -n
   livekit-staging get challenges` zeigt warum's klemmt.
 - **sops kann nicht entschluesseln**: SOPS_AGE_KEY oder GPG-Key fehlt im
-  aktiven Shell. `sops -d secrets/livekit.yaml.gotmpl` zum Test.
+  aktiven Shell. `sops -d secrets/default/livekit.yaml.gotmpl` zum Test.
