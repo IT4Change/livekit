@@ -42,6 +42,10 @@ jobs:
           repository: livekit-examples/meet
           ref: ${{ steps.ref.outputs.value }}
           path: meet/upstream
+          # Upstream nutzt Git LFS fuer die Background-JPGs in public/.
+          # Ohne lfs:true kommen nur Pointer-Dateien an und der Next.js
+          # Image-Import wirft "is not a valid image file".
+          lfs: true
 
       - name: Image metadata
         id: meta
