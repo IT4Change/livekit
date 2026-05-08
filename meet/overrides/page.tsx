@@ -3,14 +3,12 @@
 // Override fuer livekit-examples/meet/app/page.tsx.
 // Statt Demo-Random-Room-Generator: Liste der erlaubten Raeume (aus
 // /api/rooms, server-side aus ALLOWED_ROOMS_JSON gefiltert -- niemals
-// Klartext-Password ans Frontend).
+// Klartext-Password ans Frontend; Teilnehmerzahl vom LiveKit-Server).
 //
-// Klick auf "Beitreten" -> Redirect zur Standard-Pre-Join-Page von
-// livekit-examples/meet (`/rooms/<name>`). Dort wird Name + Mic/Cam
-// abgefragt. Hier kein Name -- waere doppelt.
+// Klick auf "Beitreten" -> Standard-Pre-Join-Page von livekit-examples/meet
+// (`/rooms/<name>`). Dort wird Name + Mic/Cam abgefragt.
 //
-// "Hosted on LiveKit Cloud" und Upstream-GitHub-Link sind raus -- Verweis
-// stattdessen auf das eigene IT4Change/livekit Repo.
+// Polling alle 5s damit Teilnehmerzahl annaehernd live aussieht.
 
 'use client';
 
@@ -22,28 +20,47 @@ type PublicRoom = {
   name: string;
   displayName?: string;
   hasPassword?: boolean;
+  numParticipants?: number;
 };
 
-function RoomCard({ room }: { room: PublicRoom }) {
+const POLL_INTERVAL_MS = 5_000;
+
+function RoomRow({ room }: { room: PublicRoom }) {
   const router = useRouter();
-  const onJoin = () => {
-    // Standard-Pre-Join-Page von livekit-examples/meet uebernimmt
-    // Name- und Mic/Cam-Setup.
-    router.push(`/rooms/${encodeURIComponent(room.name)}`);
-  };
+  const onJoin = () => router.push(`/rooms/${encodeURIComponent(room.name)}`);
+  const count = room.numParticipants ?? 0;
 
   return (
     <div
-      className={styles.tabContent}
-      style={{ minWidth: '14rem', alignItems: 'center', textAlign: 'center' }}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '1rem',
+        padding: '0.75rem 1rem',
+        border: '1px solid rgba(255,255,255,0.15)',
+        borderRadius: '8px',
+        background: 'rgba(255,255,255,0.03)',
+      }}
     >
-      <h3 style={{ margin: 0 }}>{room.displayName ?? room.name}</h3>
-      {room.hasPassword && (
-        <p style={{ margin: 0, fontSize: '0.85rem', opacity: 0.7 }}>
-          🔒 Passwort-geschuetzt
-        </p>
-      )}
-      <button className="lk-button" onClick={onJoin} style={{ paddingInline: '1.5rem' }}>
+      <span style={{ fontWeight: 600, flex: '1 1 auto' }}>
+        {room.displayName ?? room.name}
+        {room.hasPassword && (
+          <span style={{ marginLeft: '0.5rem', opacity: 0.7, fontSize: '0.85em' }}>🔒</span>
+        )}
+      </span>
+      <span
+        style={{
+          opacity: 0.8,
+          minWidth: '4.5rem',
+          textAlign: 'right',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+        title="Aktive Teilnehmer"
+      >
+        👥 {count}
+      </span>
+      <button className="lk-button" onClick={onJoin} style={{ paddingInline: '1.25rem' }}>
         Beitreten
       </button>
     </div>
@@ -54,10 +71,22 @@ export default function Page() {
   const [rooms, setRooms] = useState<PublicRoom[] | null>(null);
 
   useEffect(() => {
-    fetch('/api/rooms')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setRooms(data))
-      .catch(() => setRooms([]));
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/rooms', { cache: 'no-store' });
+        const data = r.ok ? await r.json() : [];
+        if (!cancelled) setRooms(data);
+      } catch {
+        if (!cancelled) setRooms([]);
+      }
+    };
+    load();
+    const id = setInterval(load, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   return (
@@ -89,14 +118,15 @@ export default function Page() {
           <div
             style={{
               display: 'flex',
-              flexWrap: 'wrap',
-              justifyContent: 'center',
-              gap: '1.5rem',
+              flexDirection: 'column',
+              gap: '0.75rem',
               marginTop: '2rem',
+              width: '100%',
+              maxWidth: '36rem',
             }}
           >
             {rooms.map((room) => (
-              <RoomCard key={room.name} room={room} />
+              <RoomRow key={room.name} room={room} />
             ))}
           </div>
         )}
