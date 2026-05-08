@@ -34,11 +34,16 @@ livekit:
   # (auch mit auto_create) -- ist erst ab spaeteren Tags konsistent. v1.11.0
   # = aktueller stable.
   IMAGE_TAG: v1.11.0
-  # Auto-Create AUS: nur die in secrets.rooms definierten Raeume werden
-  # vom Init-Container des Meet-Pods pre-created. Damit kann niemand
-  # ueber URL-Manipulation neue Raeume aufmachen -- nur die Allow-Liste
-  # ist erreichbar.
-  AUTO_CREATE_ROOM: false
+  # Auto-Create AN: der LiveKit-Server erstellt Raeume on-demand sobald
+  # ein gueltiger Token reinkommt. Sicherheit gegen "fremde" Raeume kommt
+  # NICHT vom auto_create:false, sondern von der Allow-List in der
+  # Meet-API (overrides/route.ts): nur fuer in secrets.rooms gelistete
+  # Raeume werden ueberhaupt Tokens ausgestellt -- ohne Token kein Connect.
+  # Hintergrund warum auto_create:false NICHT funktioniert: LiveKit cleant
+  # leere Raeume nach empty_timeout (Default 300s). Init-Container erstellt
+  # die Raeume zwar beim Pod-Start, nach 5min Idle sind sie weg, naechster
+  # Join scheitert mit "requested room does not exist".
+  AUTO_CREATE_ROOM: true
 
 redis:
   # true = Bitnami-Redis im LiveKit-NS deployen
