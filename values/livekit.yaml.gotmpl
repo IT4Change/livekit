@@ -1,0 +1,74 @@
+replicaCount: {{ .StateValues.deploy.REPLICA_COUNT }}
+
+# loadBalancer.type steuert mehrere Chart-Templates gleichzeitig:
+#   - "disable" => KEIN Ingress (wichtig, sonst rendert das Chart eine
+#     Resource mit leeren rules und K8s lehnt ab), Service als ClusterIP,
+#     alle Ports (HTTP, RTC-TCP, RTC-UDP, Metrics) dabei.
+#   - andere Werte ("aws"/"gke"/"do"/...) erzeugen einen Cloud-spezifischen
+#     Ingress den wir nicht brauchen, weil Traefik IngressRoute das uebernimmt.
+# Das Chart hat _kein_ `ingress.enabled`-Flag -- "disable" ist der Weg.
+loadBalancer:
+  type: disable
+
+# API-Keys werden NICHT in livekit.keys (ConfigMap) abgelegt, sondern in einem
+# Kubernetes Secret. storeKeysInSecret.enabled erzeugt das Secret aus den
+# Keys die in secrets/livekit.yaml.gotmpl unter storeKeysInSecret.keys stehen.
+# livekit.key_file gibt LiveKit den Pfad zum gemounteten Secret-File.
+storeKeysInSecret:
+  enabled: true
+
+livekit:
+  log_level: info
+  port: 7880
+  prometheus_port: 6789
+  # ACHTUNG: das Chart-Template setzt mountPath UND subPath auf diesen Wert,
+  # was per K8s-Spec eigentlich nicht parallel valid ist (mountPath muss
+  # absolut, subPath relativ sein). Mit "keys.yaml" landet es in einigen
+  # K8s-Versionen relativ zum Container-WORKDIR (=/) als /keys.yaml, in
+  # neueren Versionen koennte K8s den mountPath ablehnen. Falls Pod-Start
+  # mit "absolute path required" o.ae. fehlschlaegt: Issue im Chart, dann
+  # Plan B = existingSecret + eigener Secret-Manifest + Patch der mountPath.
+  key_file: keys.yaml
+
+  rtc:
+    use_external_ip: {{ .StateValues.livekit.USE_EXTERNAL_IP }}
+    tcp_port: {{ .StateValues.livekit.RTC_TCP_PORT }}
+    udp_port: {{ .StateValues.livekit.RTC_UDP_PORT }}
+
+  # Multi-Tenancy: Auto-Create deaktiviert, das ocelot-Backend legt Rooms
+  # explizit per RoomServiceClient.createRoom() an.
+  room:
+    auto_create: false
+    empty_timeout: 300
+    departure_timeout: 20
+
+  # TURN: fuer Staging aus. Wenn UDP-LB klemmt -> turn.enabled: true und
+  # 5349/3478 separat exposen.
+  turn:
+    enabled: false
+
+  redis:
+{{- if eq .StateValues.redis.MANAGED true }}
+    address: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}.{{ .StateValues.deploy.NAMESPACE }}.svc.cluster.local:6379
+{{- else }}
+    address: {{ .StateValues.redis.EXTERNAL_ADDRESS }}
+{{- end }}
+
+  # API-Keys werden aus secrets/livekit.yaml.gotmpl gemerged (sops-encrypted).
+
+# Pod-Annotation fuer Prometheus-Scrape. Funktioniert mit Default-Prom-Configs
+# die `prometheus.io/scrape` auswerten.
+podAnnotations:
+{{- if eq .StateValues.livekit.PROMETHEUS_ENABLED true }}
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "6789"
+  prometheus.io/path: "/metrics"
+{{- end }}
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi

@@ -1,0 +1,35 @@
+deploy:
+  NAMESPACE: livekit-staging
+  RELEASE_NAME_LIVEKIT: livekit-server
+  RELEASE_NAME_REDIS: redis
+  REPLICA_COUNT: 1
+  # LiveKit-Server (Signaling + RTC) -- Subdomain getrennt vom Meet-UI, damit
+  # beide unabhaengig deployed/rotiert werden koennen.
+  LIVEKIT_DOMAIN: livekit.stage.it4c.org
+  LIVEKIT_TLS_SECRET_NAME: livekit-stage-it4c-org-tls
+  # Meet-UI (Default-Conferencing-Frontend) -- noch nicht deployed, Domain
+  # vorab reserviert damit DNS und Cert-Plan stimmen.
+  MEET_DOMAIN: meet.stage.it4c.org
+  MEET_TLS_SECRET_NAME: meet-stage-it4c-org-tls
+  # letsencrypt-prod fuer browser-trusted Zertifikate (5/Woche/Domain Limit).
+  # Waehrend Trial-and-Error besser auf "letsencrypt-staging" stellen.
+  ACME_ISSUER: letsencrypt-prod
+
+traefik:
+  ENTRYPOINT: websecure
+  # Traefik v3.x = traefik.io/v1alpha1 ; Traefik v2.x = traefik.containo.us/v1alpha1
+  API_VERSION: traefik.io/v1alpha1
+
+livekit:
+  RTC_UDP_PORT: 7882
+  RTC_TCP_PORT: 7881
+  # use_external_ip: STUN-basierte Auto-Detect der Public-IP. Falls Probleme:
+  # auf false und LIVEKIT_NODE_IP per Env auf die LB-IP setzen.
+  USE_EXTERNAL_IP: true
+  PROMETHEUS_ENABLED: true
+
+redis:
+  # true = Bitnami-Redis im LiveKit-NS deployen
+  # false = externe Redis (EXTERNAL_ADDRESS muss gesetzt sein)
+  MANAGED: true
+  EXTERNAL_ADDRESS: ""

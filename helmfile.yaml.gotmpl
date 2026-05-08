@@ -1,0 +1,54 @@
+---
+environments:
+  default:
+    values:
+      - ./environments/default.yaml.gotmpl
+    secrets:
+      - ./environments/default.secrets.yaml
+  production:
+    values:
+      - ./environments/production.yaml.gotmpl
+    secrets:
+      - ./environments/production.secrets.yaml
+---
+repositories:
+  - name: livekit
+    url: https://helm.livekit.io
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
+
+releases:
+  {{- if eq .StateValues.redis.MANAGED true }}
+  # Minimaler Redis als Raw-Manifest. Bewusst NICHT das Bitnami-Chart, weil
+  # Bitnami die Public-Images im August 2025 weitgehend hinter Subscription
+  # gestellt hat. LiveKit braucht nur Basic-Redis (Keys + Pub/Sub) -- ein
+  # vanilla `redis:7-alpine`-Pod mit PVC reicht.
+  - name: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+    namespace: {{ .StateValues.deploy.NAMESPACE }}
+    chart: bedag/raw
+    version: 2.0.0
+    values:
+      - ./manifests/redis.yaml.gotmpl
+  {{- end }}
+
+  - name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+    namespace: {{ .StateValues.deploy.NAMESPACE }}
+    chart: livekit/livekit-server
+    version: 1.8.3
+    {{- if eq .StateValues.redis.MANAGED true }}
+    needs:
+      - {{ .StateValues.deploy.NAMESPACE }}/{{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+    {{- end }}
+    values:
+      - ./values/livekit.yaml.gotmpl
+    secrets:
+      - ./secrets/livekit.yaml.gotmpl
+
+  - name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-ingress
+    namespace: {{ .StateValues.deploy.NAMESPACE }}
+    chart: bedag/raw
+    version: 2.0.0
+    needs:
+      - {{ .StateValues.deploy.NAMESPACE }}/{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+    values:
+      - ./manifests/ingressroute.yaml.gotmpl

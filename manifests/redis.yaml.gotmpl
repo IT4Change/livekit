@@ -1,0 +1,98 @@
+resources:
+  # Headless Service fuer das StatefulSet (interne Pod-DNS)
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}-headless
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+    spec:
+      clusterIP: None
+      ports:
+        - port: 6379
+          targetPort: redis
+          protocol: TCP
+          name: redis
+      selector:
+        app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+
+  # Cluster-Service den LiveKit anspricht
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+    spec:
+      type: ClusterIP
+      ports:
+        - port: 6379
+          targetPort: redis
+          protocol: TCP
+          name: redis
+      selector:
+        app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+
+  - apiVersion: apps/v1
+    kind: StatefulSet
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+    spec:
+      serviceName: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}-headless
+      replicas: 1
+      selector:
+        matchLabels:
+          app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+      template:
+        metadata:
+          labels:
+            app: {{ .StateValues.deploy.RELEASE_NAME_REDIS }}
+        spec:
+          containers:
+            - name: redis
+              image: redis:7-alpine
+              imagePullPolicy: IfNotPresent
+              command:
+                - redis-server
+                - --appendonly
+                - "yes"
+                - --save
+                - ""
+              ports:
+                - name: redis
+                  containerPort: 6379
+                  protocol: TCP
+              livenessProbe:
+                tcpSocket:
+                  port: redis
+                initialDelaySeconds: 15
+                periodSeconds: 10
+              readinessProbe:
+                exec:
+                  command: ["redis-cli", "ping"]
+                initialDelaySeconds: 5
+                periodSeconds: 5
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+      volumeClaimTemplates:
+        - metadata:
+            name: data
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 2Gi
