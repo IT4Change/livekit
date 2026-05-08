@@ -98,7 +98,45 @@ applyPatch(
   }, []);`
 );
 
-// ----- Patch 4: Friendly handleEncryptionError -----
+// ----- Patch 4a: Import PermissionsCheck -----
+if (!src.includes("from '@/lib/PermissionsCheck'")) {
+  const importAnchor = "import { useRouter } from 'next/navigation';";
+  if (!src.includes(importAnchor)) {
+    console.error('[IT4C patch] permissions-check-import: anchor not found');
+    process.exit(1);
+  }
+  src = src.replace(
+    importAnchor,
+    `${importAnchor}\nimport { PermissionsCheck } from '@/lib/PermissionsCheck';`
+  );
+  console.log('[IT4C patch] permissions-check-import: applied');
+}
+
+// ----- Patch 4b: Render PermissionsCheck above PreJoin -----
+applyPatch(
+  'permissions-check-render',
+  'IT4C: permissions-check above prejoin',
+  `        <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
+          <PreJoin
+            defaults={preJoinDefaults}
+            onSubmit={handlePreJoinSubmit}
+            onError={handlePreJoinError}
+          />
+        </div>`,
+  `        <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
+          {/* IT4C: permissions-check above prejoin (auto-injected) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
+            <PermissionsCheck />
+            <PreJoin
+              defaults={preJoinDefaults}
+              onSubmit={handlePreJoinSubmit}
+              onError={handlePreJoinError}
+            />
+          </div>
+        </div>`
+);
+
+// ----- Patch 5: Friendly handleEncryptionError -----
 applyPatch(
   'friendly-encryption-toast',
   'IT4C: friendly encryption error toast',
