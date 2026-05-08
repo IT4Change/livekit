@@ -114,7 +114,9 @@ kubectl -n livekit-staging get svc livekit-server
 
 # WSS via Traefik
 curl -i https://livekit.stage.it4c.org/
-# erwartet: HTTP/2 200 mit "OK" body (LiveKit Health-Endpoint)
+# erwartet: HTTP/2 404 mit body "404 page not found" (19 bytes).
+# LiveKit hat keine /-Route -- der 404 zeigt nur, dass TLS+Routing klappen.
+# Echter End-to-End-Test ist der WSS-Connect (livekit-cli oder Browser).
 
 # Connection-Test mit livekit-cli (lokal)
 livekit-cli create-token \

@@ -63,6 +63,10 @@ resources:
           kind: Rule
           services:
             - name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
-              port: 7880
+              # Service-Port 80 -> targetPort 7880 (Container). Das
+              # livekit-server Helm-Chart exposed HTTP/WSS als Service:80
+              # (nicht :7880) -- die Nummer hier ist der Service-Port,
+              # nicht der Container-Port.
+              port: 80
       tls:
         secretName: {{ .StateValues.deploy.LIVEKIT_TLS_SECRET_NAME }}

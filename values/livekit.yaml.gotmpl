@@ -1,5 +1,13 @@
 replicaCount: {{ .StateValues.deploy.REPLICA_COUNT }}
 
+# Image-Tag explizit pinnen. Chart 1.8.3 liefert per Default
+# livekit-server:v1.8.3 -- der hat aber den /rtc/v1/validate Endpoint
+# noch nicht, den livekit-client >=2.x voraussetzt. Ohne den Endpoint
+# beendet das Meet-UI nach dem Connect die Session als "Token invalid"
+# (sieht im Server-Log aus wie CLIENT_REQUEST_LEAVE / User Initiated Abort).
+image:
+  tag: {{ .StateValues.livekit.IMAGE_TAG | quote }}
+
 # loadBalancer.type steuert mehrere Chart-Templates gleichzeitig:
 #   - "disable" => KEIN Ingress (wichtig, sonst rendert das Chart eine
 #     Resource mit leeren rules und K8s lehnt ab), Service als ClusterIP,
@@ -34,6 +42,14 @@ livekit:
     use_external_ip: {{ .StateValues.livekit.USE_EXTERNAL_IP }}
     tcp_port: {{ .StateValues.livekit.RTC_TCP_PORT }}
     udp_port: {{ .StateValues.livekit.RTC_UDP_PORT }}
+    # UDP-Mux erzwingen: alle Streams ueber den festen udp_port (7882),
+    # statt random-Ports aus 50000-60000. Sonst kommt der Browser nicht
+    # durch die Hetzner-Firewall (die nur 7882 inbound oeffnet) -> ICE
+    # waehlt den TCP-Fallback :7881 -> "stream unterbricht staendig".
+    # Chart 1.8.3 hat port_range_* als Default; explizit auf 0 setzen
+    # entzieht dem Range-Modus die Basis und zwingt den Server in Mux.
+    port_range_start: 0
+    port_range_end: 0
 
   # Multi-Tenancy: Auto-Create per env steuerbar. Prod = false (ocelot-
   # Backend legt Rooms explizit per RoomServiceClient.createRoom() an).
