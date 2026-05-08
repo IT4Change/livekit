@@ -1,34 +1,121 @@
-// IT4C Meet -- Patch livekit-examples/meet PageClientImpl.tsx
+// IT4C Meet -- Patches livekit-examples/meet PageClientImpl.tsx
 //
-// Reicht den `password` URL-Query-Param an den /api/connection-details Call
-// weiter. Ohne den Patch sendet der Pre-Join-Screen das Password nicht mit,
-// und Password-geschuetzte Raeume waeren beitritts-broken (API gibt 403).
+// Drei Patches, alle idempotent (Sentinel-Kommentar erkennt eigene Edits):
 //
-// Idempotent -- erkennt eigenes Marker-Kommentar und beendet sich ohne
-// nochmaligen Inject. Wird vom Dockerfile waehrend dem Build aufgerufen.
+//   1. PASSWORD-FORWARD: leitet `password` URL-Query-Param an die
+//      /api/connection-details-API weiter, sonst koennen Password-
+//      geschuetzte Raeume nicht beigetreten werden.
+//   2. TOAST-ERROR: ersetzt `alert(...)` durch `toast.error(...)`. Plus
+//      User-friendly Texte fuer haeufige Faelle (NotAllowedError =
+//      Permission, "room does not exist", generic).
+//   3. ENC-TOAST: gleiches fuer Encryption-Errors.
+//
+// Sentinel-Kommentare:
+//   - "IT4C: forward password URL param"
+//   - "IT4C: friendly error toast"
+//   - "IT4C: friendly encryption error toast"
+//
+// Wird vom Dockerfile waehrend dem Build aufgerufen. Bei Marker-Mismatch
+// (upstream hat sich geaendert) bricht der Build mit klarer Fehlermeldung
+// ab -- Marker dann manuell anpassen.
 
 const fs = require('fs');
-
 const FILE = 'app/rooms/[roomName]/PageClientImpl.tsx';
-const MARKER = "url.searchParams.append('participantName', values.username);";
-const SENTINEL = 'IT4C: forward password URL param';
-const INJECTION = `${MARKER}
-        // ${SENTINEL} (auto-injected by meet/scripts/patch-pageclient.js)
+
+let src = fs.readFileSync(FILE, 'utf8');
+
+function applyPatch(label, sentinel, marker, replacement) {
+  if (src.includes(sentinel)) {
+    console.log(`[IT4C patch] ${label}: already applied, skipping`);
+    return;
+  }
+  if (!src.includes(marker)) {
+    console.error(`[IT4C patch] ${label}: marker not found -- upstream changed?`);
+    console.error(`[IT4C patch] expected:\n${marker}`);
+    process.exit(1);
+  }
+  src = src.replace(marker, replacement);
+  console.log(`[IT4C patch] ${label}: applied`);
+}
+
+// ----- Patch 1: Password URL forwarding -----
+applyPatch(
+  'password-forward',
+  'IT4C: forward password URL param',
+  "url.searchParams.append('participantName', values.username);",
+  `url.searchParams.append('participantName', values.username);
+        // IT4C: forward password URL param (auto-injected)
         const _it4cPwd = new URL(window.location.href).searchParams.get('password');
-        if (_it4cPwd) url.searchParams.append('password', _it4cPwd);`;
+        if (_it4cPwd) url.searchParams.append('password', _it4cPwd);`
+);
 
-const src = fs.readFileSync(FILE, 'utf8');
-
-if (src.includes(SENTINEL)) {
-  console.log(`[IT4C patch] ${FILE} already patched, skipping`);
-  process.exit(0);
+// ----- Patch 2: toast import -----
+// Wird gleichzeitig fuer Patch 2 und 3 gebraucht.
+if (!src.includes("from 'react-hot-toast'")) {
+  const importMarker = "import { useRouter } from 'next/navigation';";
+  if (!src.includes(importMarker)) {
+    console.error('[IT4C patch] toast-import: useRouter import not found');
+    process.exit(1);
+  }
+  src = src.replace(
+    importMarker,
+    `${importMarker}\nimport toast from 'react-hot-toast';`
+  );
+  console.log('[IT4C patch] toast-import: applied');
 }
-if (!src.includes(MARKER)) {
-  console.error(`[IT4C patch] marker not found in ${FILE} -- upstream changed?`);
-  console.error(`[IT4C patch] expected: ${MARKER}`);
-  process.exit(1);
-}
 
-const out = src.replace(MARKER, INJECTION);
-fs.writeFileSync(FILE, out);
-console.log(`[IT4C patch] injected password forwarding into ${FILE}`);
+// ----- Patch 3: Friendly handleError -----
+applyPatch(
+  'friendly-error-toast',
+  'IT4C: friendly error toast',
+  `const handleError = React.useCallback((error: Error) => {
+    console.error(error);
+    alert(\`Encountered an unexpected error, check the console logs for details: \${error.message}\`);
+  }, []);`,
+  `const handleError = React.useCallback((error: Error) => {
+    // IT4C: friendly error toast (auto-injected)
+    console.error(error);
+    const name = (error as any)?.name ?? '';
+    const msg = error?.message ?? '';
+    if (name === 'NotAllowedError' || /permission denied/i.test(msg)) {
+      toast.error(
+        'Bitte erlaube Kamera und Mikrofon im Browser. Klicke auf das Schloss-Symbol links neben der URL und stelle die Berechtigungen auf "Erlauben".',
+        { duration: 10000 }
+      );
+    } else if (/room does not exist/i.test(msg)) {
+      toast.error(
+        'Der Raum ist aktuell nicht verfuegbar. Bitte versuche es erneut oder kontaktiere die IT4C-Administration.',
+        { duration: 8000 }
+      );
+    } else if (name === 'NotFoundError' || /could not start/i.test(msg)) {
+      toast.error(
+        'Kein Mikrofon/Kamera gefunden. Bitte ein Geraet anschliessen oder im Browser ausgewaehlt.',
+        { duration: 8000 }
+      );
+    } else {
+      toast.error('Verbindungsfehler: ' + msg, { duration: 6000 });
+    }
+  }, []);`
+);
+
+// ----- Patch 4: Friendly handleEncryptionError -----
+applyPatch(
+  'friendly-encryption-toast',
+  'IT4C: friendly encryption error toast',
+  `const handleEncryptionError = React.useCallback((error: Error) => {
+    console.error(error);
+    alert(
+      \`Encountered an unexpected encryption error, check the console logs for details: \${error.message}\`,
+    );
+  }, []);`,
+  `const handleEncryptionError = React.useCallback((error: Error) => {
+    // IT4C: friendly encryption error toast (auto-injected)
+    console.error(error);
+    toast.error('Verschluesselungsfehler: ' + (error?.message ?? 'unbekannt'), {
+      duration: 6000,
+    });
+  }, []);`
+);
+
+fs.writeFileSync(FILE, src);
+console.log(`[IT4C patch] all patches written to ${FILE}`);
