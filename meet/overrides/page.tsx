@@ -3,14 +3,12 @@
 // Override fuer livekit-examples/meet/app/page.tsx.
 // Liste der erlaubten Raeume aus /api/rooms (server-side aus
 // ALLOWED_ROOMS_JSON gefiltert; niemals Klartext-Password ans Frontend).
-//
 // Klick "Beitreten":
 //   - Raum ohne Passwort -> direkter Push zu /rooms/<name>
 //   - Raum mit Passwort  -> inline Form, Pre-Flight gegen
 //     /api/connection-details validiert, dann Push zu /rooms/<name>?password=...
-//     Der Pre-Join-Screen liest das Password aus dem URL-Param und reicht es
-//     beim Token-Holen mit (Patch in PageClientImpl.tsx, siehe
-//     meet/scripts/patch-pageclient.js).
+//     PageClientImpl.tsx liest das Password aus dem URL-Param und reicht es
+//     beim Token-Holen mit (Patch via meet/scripts/patch-pageclient.js).
 
 'use client';
 
@@ -26,6 +24,19 @@ type PublicRoom = {
 };
 
 const POLL_INTERVAL_MS = 5_000;
+
+const inputStyle: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.05)',
+  border: '1px solid rgba(255,255,255,0.15)',
+  borderRadius: '4px',
+  color: 'inherit',
+  padding: '0.5rem 0.75rem',
+  fontSize: '1rem',
+  fontFamily: 'inherit',
+  outline: 'none',
+  width: '100%',
+  boxSizing: 'border-box',
+};
 
 function PasswordForm({
   room,
@@ -44,9 +55,6 @@ function PasswordForm({
     setError(null);
     setBusy(true);
     try {
-      // Pre-Flight: validiert das Passwort serverseitig, bevor der Pre-Join-
-      // Screen geladen wird. participantName ist Platzhalter -- der Token
-      // wird im Pre-Join nochmal mit echtem Namen geholt.
       const params = new URLSearchParams({
         roomName: room.name,
         participantName: '__pre_check__',
@@ -76,13 +84,9 @@ function PasswordForm({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: '0.5rem',
-        padding: '0.75rem 1rem',
-        marginTop: '-0.5rem',
-        border: '1px solid rgba(255,255,255,0.15)',
-        borderTop: 'none',
-        borderRadius: '0 0 8px 8px',
-        background: 'rgba(255,255,255,0.05)',
+        gap: '0.75rem',
+        padding: '1rem',
+        borderTop: '1px solid rgba(255,255,255,0.08)',
       }}
     >
       <input
@@ -93,12 +97,19 @@ function PasswordForm({
         autoFocus
         required
         disabled={busy}
+        autoComplete="new-password"
+        style={inputStyle}
       />
       {error && (
         <p style={{ color: '#f55', margin: 0, fontSize: '0.85rem' }}>{error}</p>
       )}
       <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button className="lk-button" type="submit" disabled={busy}>
+        <button
+          className="lk-button"
+          type="submit"
+          disabled={busy}
+          style={{ flex: '1 1 auto' }}
+        >
           {busy ? 'Pruefe ...' : 'Beitreten'}
         </button>
         <button
@@ -112,6 +123,8 @@ function PasswordForm({
             padding: '0.5rem 1rem',
             borderRadius: '4px',
             cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 'inherit',
           }}
         >
           Abbrechen
@@ -135,7 +148,14 @@ function RoomRow({ room }: { room: PublicRoom }) {
   };
 
   return (
-    <div>
+    <div
+      style={{
+        border: '1px solid rgba(255,255,255,0.15)',
+        borderRadius: '8px',
+        background: 'rgba(255,255,255,0.03)',
+        overflow: 'hidden',
+      }}
+    >
       <div
         style={{
           display: 'flex',
@@ -143,9 +163,6 @@ function RoomRow({ room }: { room: PublicRoom }) {
           justifyContent: 'space-between',
           gap: '1rem',
           padding: '0.75rem 1rem',
-          border: '1px solid rgba(255,255,255,0.15)',
-          borderRadius: showPwdForm ? '8px 8px 0 0' : '8px',
-          background: 'rgba(255,255,255,0.03)',
         }}
       >
         <span style={{ fontWeight: 600, flex: '1 1 auto' }}>
@@ -210,6 +227,24 @@ export default function Page() {
 
   return (
     <>
+      {/* Browser-Autofill-Verlauf wegblenden -- Chrome/Firefox setzen sonst
+          eigenen Hintergrund (gelb/gruen) auf Password-Inputs. */}
+      <style jsx global>{`
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus,
+        input:-webkit-autofill:active {
+          -webkit-box-shadow: 0 0 0 1000px rgba(36, 36, 36, 1) inset !important;
+          -webkit-text-fill-color: #fff !important;
+          caret-color: #fff;
+          transition: background-color 5000s ease-in-out 0s;
+        }
+        input:-moz-autofill {
+          background-color: rgba(36, 36, 36, 1) !important;
+          color: #fff !important;
+        }
+      `}</style>
+
       <main className={styles.main} data-lk-theme="default">
         <div className="header" style={{ textAlign: 'center' }}>
           <img
