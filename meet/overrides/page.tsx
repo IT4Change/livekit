@@ -84,7 +84,7 @@ function PermissionsBanner() {
       <p style={{ margin: '0.5rem 0 0', opacity: 0.9, lineHeight: 1.6 }}>
         Du kannst Raeumen erst beitreten, wenn der Browser-Zugriff erlaubt ist.
         Klicke auf das Schloss-Symbol links neben der URL, stelle Kamera und
-        Mikrofon auf "Erlauben" und lade die Seite neu.
+        Mikrofon auf &laquo;Erlauben&raquo; und lade die Seite neu.
       </p>
     </div>
   );
