@@ -29,9 +29,11 @@ livekit:
   USE_EXTERNAL_IP: true
   PROMETHEUS_ENABLED: true
   # Server-Image-Version. Chart 1.8.3 hat v1.8.3 als Default, aber der
-  # /rtc/v1/validate Endpoint, den moderne livekit-client SDKs voraussetzen,
-  # ist erst in spaeteren Tags drin. Auf einen Tag aus 1.9.x oder neuer pinnen.
-  IMAGE_TAG: v1.9.0
+  # /rtc/v1/validate Endpoint -- den moderne livekit-client SDKs voraussetzen
+  # und der bei v1.9.0 fuer nicht-existierende Raeume 404 statt 200 lieferte
+  # (auch mit auto_create) -- ist erst ab spaeteren Tags konsistent. v1.11.0
+  # = aktueller stable.
+  IMAGE_TAG: v1.11.0
   # Auto-Create im Staging an, damit das Meet-UI ohne expliziten createRoom-
   # Call Raeume aufmachen kann (Test-Workflow). Prod laesst das aus, dort
   # legt das ocelot-Backend Rooms explizit an.
