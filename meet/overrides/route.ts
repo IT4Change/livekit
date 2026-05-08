@@ -25,8 +25,11 @@ const COOKIE_KEY = 'random-participant-postfix';
 
 type RoomConfig = {
   name: string;
+  // YAML-Toleranz: beide Varianten akzeptieren.
   displayName?: string;
-  password?: string;
+  displayname?: string;
+  // YAML parst "1234" als int -- daher number ODER string ODER undefined.
+  password?: string | number;
 };
 
 function loadAllowedRooms(): RoomConfig[] {
@@ -37,6 +40,11 @@ function loadAllowedRooms(): RoomConfig[] {
   } catch {
     return [];
   }
+}
+
+function expectedPassword(room: RoomConfig): string {
+  if (room.password === undefined || room.password === null) return '';
+  return String(room.password);
 }
 
 export async function GET(request: NextRequest) {
@@ -68,7 +76,8 @@ export async function GET(request: NextRequest) {
     if (!room) {
       return new NextResponse('Room not allowed', { status: 403 });
     }
-    if (room.password && room.password !== password) {
+    const expected = expectedPassword(room);
+    if (expected && expected !== password) {
       return new NextResponse('Invalid room password', { status: 403 });
     }
 

@@ -4,6 +4,10 @@
 // "hat Passwort?") + aktuelle Teilnehmerzahl vom LiveKit-Server.
 // NIEMALS das Plaintext-Password ans Frontend ausliefern.
 // Wird von der Landing-Page periodisch (Polling) gerufen.
+//
+// Robust gegen YAML-Schreibweisen-Varianten:
+//   - displayName ODER displayname (lowercase)
+//   - password kann string oder number sein (YAML parst "1234" als int)
 
 import { NextResponse } from 'next/server';
 import { RoomServiceClient } from 'livekit-server-sdk';
@@ -13,11 +17,15 @@ const LIVEKIT_URL = process.env.LIVEKIT_URL;
 const API_KEY = process.env.LIVEKIT_API_KEY;
 const API_SECRET = process.env.LIVEKIT_API_SECRET;
 
-type RoomConfig = {
-  name: string;
-  displayName?: string;
-  password?: string;
-};
+function readDisplayName(r: any): string | undefined {
+  return r?.displayName ?? r?.displayname;
+}
+
+function readPasswordRaw(r: any): string {
+  const v = r?.password;
+  if (v === undefined || v === null) return '';
+  return String(v);
+}
 
 async function fetchParticipantCounts(): Promise<Record<string, number>> {
   if (!LIVEKIT_URL || !API_KEY || !API_SECRET) return {};
@@ -27,7 +35,6 @@ async function fetchParticipantCounts(): Promise<Record<string, number>> {
     const list = await svc.listRooms();
     const out: Record<string, number> = {};
     for (const r of list) {
-      // Field heisst je nach SDK-Version numParticipants oder num_participants.
       const n = (r as any).numParticipants ?? (r as any).num_participants ?? 0;
       out[r.name] = Number(n);
     }
@@ -38,11 +45,11 @@ async function fetchParticipantCounts(): Promise<Record<string, number>> {
 }
 
 export async function GET() {
-  let rooms: RoomConfig[] = [];
+  let rooms: any[] = [];
   try {
     const parsed = JSON.parse(ALLOWED_ROOMS_JSON);
     if (Array.isArray(parsed)) {
-      rooms = parsed.filter((r): r is RoomConfig => typeof r?.name === 'string');
+      rooms = parsed.filter((r) => typeof r?.name === 'string');
     }
   } catch {
     rooms = [];
@@ -52,8 +59,8 @@ export async function GET() {
 
   const publicRooms = rooms.map((r) => ({
     name: r.name,
-    displayName: r.displayName,
-    hasPassword: typeof r.password === 'string' && r.password.length > 0,
+    displayName: readDisplayName(r),
+    hasPassword: readPasswordRaw(r).length > 0,
     numParticipants: counts[r.name] ?? 0,
   }));
 
