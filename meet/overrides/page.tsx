@@ -25,6 +25,71 @@ type PublicRoom = {
 
 const POLL_INTERVAL_MS = 5_000;
 
+type PermState = 'granted' | 'denied' | 'prompt' | 'unknown';
+
+function PermissionsBanner() {
+  const [cam, setCam] = useState<PermState>('unknown');
+  const [mic, setMic] = useState<PermState>('unknown');
+
+  useEffect(() => {
+    let mounted = true;
+    const check = async () => {
+      // Browsers ohne navigator.permissions (Safari teilweise) -> nichts zeigen.
+      if (typeof navigator === 'undefined' || !navigator.permissions) return;
+      try {
+        const c = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        const m = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        if (!mounted) return;
+        setCam(c.state as PermState);
+        setMic(m.state as PermState);
+        // Live-Updates wenn der User die Permission im laufenden Tab aendert.
+        c.onchange = () => mounted && setCam(c.state as PermState);
+        m.onchange = () => mounted && setMic(m.state as PermState);
+      } catch {
+        // Permission-Query nicht unterstuetzt -- kein Hinweis.
+      }
+    };
+    check();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const camDenied = cam === 'denied';
+  const micDenied = mic === 'denied';
+  if (!camDenied && !micDenied) return null;
+
+  const what =
+    camDenied && micDenied
+      ? 'Kamera- und Mikrofon-Zugriff'
+      : camDenied
+        ? 'Kamera-Zugriff'
+        : 'Mikrofon-Zugriff';
+
+  return (
+    <div
+      role="alert"
+      style={{
+        marginTop: '1.5rem',
+        width: '100%',
+        maxWidth: '36rem',
+        padding: '1rem 1.25rem',
+        borderRadius: '8px',
+        background: 'rgba(255, 100, 100, 0.08)',
+        border: '1px solid rgba(255, 100, 100, 0.4)',
+        textAlign: 'left',
+      }}
+    >
+      <p style={{ margin: 0, fontWeight: 600 }}>⚠️ {what} ist blockiert</p>
+      <p style={{ margin: '0.5rem 0 0', opacity: 0.9, lineHeight: 1.6 }}>
+        Du kannst Raeumen erst beitreten, wenn der Browser-Zugriff erlaubt ist.
+        Klicke auf das Schloss-Symbol links neben der URL, stelle Kamera und
+        Mikrofon auf "Erlauben" und lade die Seite neu.
+      </p>
+    </div>
+  );
+}
+
 const inputStyle: React.CSSProperties = {
   background: 'rgba(255,255,255,0.05)',
   border: '1px solid rgba(255,255,255,0.15)',
@@ -259,6 +324,8 @@ export default function Page() {
             Konferenzdienst von <strong>IT Team 4 Change</strong>
           </p>
         </div>
+
+        <PermissionsBanner />
 
         {rooms === null && <p>Lade Raeume ...</p>}
 
