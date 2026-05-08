@@ -1,0 +1,6 @@
+upstream/.git
+upstream/.next
+upstream/node_modules
+upstream/.env*
+*.md
+sync-upstream.sh

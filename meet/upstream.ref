@@ -1,0 +1,7 @@
+# Single-source-of-truth fuer die livekit-examples/meet Version, die in das
+# Meet-Image gebaut wird. Erste nicht-leere und nicht-mit-# beginnende Zeile
+# wird ausgelesen (von sync-upstream.sh und vom build-meet.yml Workflow).
+#
+# Erlaubt sind: Tags, Branch-Namen, Commit-SHAs.
+# Empfehlung: fuer reproduzierbare Builds einen Commit-SHA pinnen.
+main
