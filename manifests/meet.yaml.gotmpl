@@ -98,6 +98,10 @@ resources:
                 # direkt zum Signaling.
                 - name: LIVEKIT_URL
                   value: wss://{{ .StateValues.deploy.LIVEKIT_DOMAIN }}
+                # Eigene Domain fuer OpenGraph/Twitter-Card-URLs in den
+                # Page-Metadata. Wird vom Layout server-side gerendert.
+                - name: SITE_URL
+                  value: https://{{ .StateValues.deploy.MEET_DOMAIN }}
                 - name: LIVEKIT_API_KEY
                   valueFrom:
                     secretKeyRef:

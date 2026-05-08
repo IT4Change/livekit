@@ -29,8 +29,14 @@ COPY overrides/route.ts ./app/api/connection-details/route.ts
 RUN mkdir -p ./app/api/rooms
 COPY overrides/api-rooms-route.ts ./app/api/rooms/route.ts
 COPY overrides/page.tsx ./app/page.tsx
+COPY overrides/layout.tsx ./app/layout.tsx
+COPY overrides/rooms-page.tsx ./app/rooms/[roomName]/page.tsx
 # Logo ins Next.js public/.
 COPY assets/it4c-logo.png ./public/it4c-logo.png
+# Default LiveKit-Assets entfernen (favicon, OG-Image, apple-touch).
+RUN rm -f ./public/favicon.ico ./public/images/livekit-meet-open-graph.png \
+          ./public/images/livekit-meet-home.svg ./public/images/livekit-apple-touch.png \
+          ./public/images/livekit-safari-pinned-tab.svg
 # Surgischer Patch: Password-URL-Param an /api/connection-details forwarden.
 COPY scripts/patch-pageclient.js /tmp/it4c-patch-pageclient.js
 RUN node /tmp/it4c-patch-pageclient.js
