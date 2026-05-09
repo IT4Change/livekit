@@ -93,6 +93,12 @@ resources:
                 severity: info
                 channel: discord
                 kind: join
+                # Prometheus-Operator injiziert in unsere AlertmanagerConfig-
+                # Subroute automatisch einen namespace=<config-ns>-Matcher
+                # (Default alertmanagerConfigMatcherStrategy: OnNamespace).
+                # Ohne diesen Label fallen unsere Alerts auf den cluster-
+                # weiten Catch-all (anderer Discord-Webhook).
+                namespace: {{ .StateValues.deploy.NAMESPACE }}
               annotations:
                 summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Join(s) in den letzten 60s"
                 description: |
@@ -113,6 +119,7 @@ resources:
                 severity: info
                 channel: discord
                 kind: leave
+                namespace: {{ .StateValues.deploy.NAMESPACE }}
               annotations:
                 summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Teilnehmer weg"
                 description: |
@@ -127,6 +134,7 @@ resources:
               labels:
                 severity: warning
                 channel: discord
+                namespace: {{ .StateValues.deploy.NAMESPACE }}
               annotations:
                 summary: "LiveKit-Metrics scraped seit 5m nicht"
                 description: "ServiceMonitor-Target ist down -- vermutlich Pod-Restart oder Port-Naming-Drift."
