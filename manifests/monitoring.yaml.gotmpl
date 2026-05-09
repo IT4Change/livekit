@@ -78,7 +78,12 @@ resources:
             - alert: LiveKitParticipantJoined
               expr: |
                 (sum(livekit_participant_total) - sum(livekit_participant_total offset 1m)) > 0
-              for: 30s
+              # for: weggelassen (= 0s). Begruendung: die Diff-Expression
+              # ist nur ~60s positiv (vom Join bis offset 1m "einholt").
+              # Mit for: 30s und Rule-Eval-Interval 30s race-t das gegen
+              # den Window-Rand -- je nach Alignment endet pending bevor
+              # for: erreicht ist. AntiFlap macht stattdessen Alertmanager
+              # via groupWait+groupInterval.
               labels:
                 severity: info
                 channel: discord
@@ -96,7 +101,6 @@ resources:
             - alert: LiveKitParticipantLeft
               expr: |
                 (sum(livekit_participant_total) - sum(livekit_participant_total offset 1m)) < 0
-              for: 30s
               labels:
                 severity: info
                 channel: discord
