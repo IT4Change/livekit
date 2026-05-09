@@ -10,12 +10,16 @@ environments:
       # (kein eigenes Template), daher muessen die Werte zur values-File-
       # Render-Zeit als .StateValues.secrets.meet.* verfuegbar sein.
       - ./secrets/default/meet.yaml.gotmpl
+      # Discord-Webhook fuer Alertmanager (gleiche Begruendung wie meet:
+      # bedag/raw rendert keine Secret-Refs aus values, daher env-level).
+      - ./secrets/default/monitoring.yaml.gotmpl
   production:
     values:
       - ./environments/production.yaml.gotmpl
     secrets:
       - ./environments/production.secrets.yaml
       - ./secrets/production/meet.yaml.gotmpl
+      - ./secrets/production/monitoring.yaml.gotmpl
 ---
 repositories:
   - name: livekit
@@ -73,4 +77,21 @@ releases:
       - {{ .StateValues.deploy.NAMESPACE }}/{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-ingress
     values:
       - ./manifests/meet.yaml.gotmpl
+  {{- end }}
+
+  {{- if eq .StateValues.monitoring.MANAGED true }}
+  # ServiceMonitor + PrometheusRule + AlertmanagerConfig + optional Grafana-
+  # Dashboard. Setzt voraus, dass kube-prometheus-stack im Cluster laeuft
+  # (CRDs monitoring.coreos.com/v1 und v1alpha1 vorhanden). Bei Vanilla-
+  # Prometheus monitoring.MANAGED=false setzen -- die podAnnotations am
+  # livekit-server reichen dann fuer die Scrape-Discovery, Alertmanager-
+  # Routing nach Discord muss separat konfiguriert werden.
+  - name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-monitoring
+    namespace: {{ .StateValues.deploy.NAMESPACE }}
+    chart: bedag/raw
+    version: 2.0.0
+    needs:
+      - {{ .StateValues.deploy.NAMESPACE }}/{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+    values:
+      - ./manifests/monitoring.yaml.gotmpl
   {{- end }}

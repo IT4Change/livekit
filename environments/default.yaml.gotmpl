@@ -59,3 +59,21 @@ meet:
   IMAGE_TAG: latest
   IMAGE_PULL_POLICY: Always
   REPLICA_COUNT: 1
+
+monitoring:
+  # true = ServiceMonitor + PrometheusRule + AlertmanagerConfig + Discord-
+  # Secret (+ optional Grafana-Dashboard) ausrollen. Setzt kube-prometheus-
+  # stack im Cluster voraus (monitoring.coreos.com CRDs).
+  MANAGED: true
+  # Label, mit dem die Prometheus/Alertmanager-Operator-Selectoren
+  # ServiceMonitors und (Cross-Namespace-)Configs erkennen. Bei kube-
+  # prometheus-stack ueblich: release=<Release-Name des Stacks>. Pruefen
+  # mit: kubectl get prometheus -A -o jsonpath='{.items[*].spec.serviceMonitorSelector}'
+  PROMETHEUS_RELEASE_LABEL_KEY: release
+  PROMETHEUS_RELEASE_LABEL_VALUE: kube-prometheus-stack
+  SCRAPE_INTERVAL: 15s
+  # true = Grafana-Dashboard als ConfigMap mit Sidecar-Label ausrollen.
+  # Setzt voraus, dass Grafana mit sidecar.dashboards.enabled=true laeuft.
+  GRAFANA_DASHBOARD: true
+  GRAFANA_SIDECAR_LABEL_KEY: grafana_dashboard
+  GRAFANA_SIDECAR_LABEL_VALUE: "1"

@@ -8,7 +8,7 @@ Struktur und Konventionen sind an die ocelot-Releases angelehnt
 
 ```
 deploy/
-  helmfile.yaml.gotmpl                  # 3 Releases: redis, livekit-server, ingress
+  helmfile.yaml.gotmpl                  # Releases: redis, livekit-server, ingress, meet, monitoring
   environments/
     default.yaml.gotmpl                 # Staging (livekit.stage.it4c.org)
     default.secrets.yaml.example        # Vorlage; sops-encrypted committen
@@ -21,13 +21,16 @@ deploy/
     default/                            # Stage-Keys (sops-encrypted)
       livekit.yaml.gotmpl.example
       meet.yaml.gotmpl.example
+      monitoring.yaml.gotmpl.example    # Discord-Webhook fuer Alertmanager
     production/                         # Prod-Keys (sops-encrypted)
       livekit.yaml.gotmpl.example
       meet.yaml.gotmpl.example
+      monitoring.yaml.gotmpl.example
   manifests/
     redis.yaml.gotmpl                   # Vanilla Redis (StatefulSet + Service)
     ingressroute.yaml.gotmpl            # Issuer + Certificate + IngressRoute
     meet.yaml.gotmpl                    # Cert + Secret + Deployment + IngressRoute (Meet-UI)
+    monitoring.yaml.gotmpl              # Service + ServiceMonitor + PrometheusRule + AlertmanagerConfig + Dashboard
 ```
 
 Redis laeuft als minimales `redis:7-alpine` StatefulSet ueber den `bedag/raw`-
@@ -166,6 +169,93 @@ deploy:
 
 Browser zeigt dann "untrusted" Warnung -- das ist erwartet. Nach erfolgreicher
 Issuance wieder auf `letsencrypt-prod` flippen und syncen.
+
+## Monitoring + Discord-Alerts
+
+LiveKit-Server exposed Prometheus-Metriken auf Port `6789`. Das `monitoring`-
+Release rollt darauf auf:
+
+- **Service** `livekit-server-metrics` (headless) -- expose Port `:6789`
+  mit fest gewaehltem Port-Name `metrics`, unabhaengig vom Chart-Naming
+- **ServiceMonitor** -- kube-prometheus-stack Discovery
+- **PrometheusRule** -- Alerts auf Teilnehmer-Aenderungen + Metrics-Down
+- **Secret** `livekit-discord-webhook` -- Discord-Webhook URL
+- **AlertmanagerConfig** -- routet Alerts mit `channel=discord` an Discord
+  via slackConfigs (Discord akzeptiert Slack-Format auf `<webhook>/slack`)
+- **ConfigMap** `livekit-grafana-dashboard` -- Sidecar-Discovery, optional
+
+### Voraussetzungen
+
+- kube-prometheus-stack im Cluster (`monitoring.coreos.com/v1` und
+  `v1alpha1` CRDs vorhanden)
+- Alertmanager mit Cross-Namespace-Selektor fuer `AlertmanagerConfig`,
+  d.h. `alertmanagerConfigSelector` und `alertmanagerConfigNamespaceSelector`
+  am `Alertmanager`-CR matchen `livekit-staging` / `livekit`
+- Optional: Grafana mit Dashboard-Sidecar (`sidecar.dashboards.enabled=true`,
+  `searchNamespace=ALL` oder explizit den LiveKit-NS gelistet)
+
+### Setup
+
+```sh
+# 1. Discord-Webhook in deinem Discord-Server anlegen
+#    Server-Settings -> Integrations -> Webhooks -> New Webhook
+#    URL kopieren (OHNE /slack-Suffix -- das Manifest haengt es selber an)
+
+# 2. Secret-File anlegen + verschluesseln
+cp secrets/default/monitoring.yaml.gotmpl.example secrets/default/monitoring.yaml.gotmpl
+$EDITOR secrets/default/monitoring.yaml.gotmpl
+sops -e -i secrets/default/monitoring.yaml.gotmpl
+
+# 3. Release-Label des kube-prometheus-stack pruefen
+kubectl get prometheus -A -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.serviceMonitorSelector}{"\n"}{end}'
+# Falls Selector nicht "release: kube-prometheus-stack" ist:
+# environments/default.yaml.gotmpl -> monitoring.PROMETHEUS_RELEASE_LABEL_*
+# anpassen.
+
+# 4. Deploy
+helmfile -e default sync
+```
+
+### Smoketest
+
+```sh
+# ServiceMonitor wird gepicked?
+kubectl -n livekit-staging get servicemonitor
+# Target im Prometheus-UI: <prom-host>/targets -- erwartet up=1 fuer
+# serviceMonitor/livekit-staging/livekit-server/0
+
+# Direktes Curl auf den Metrics-Endpoint
+kubectl -n livekit-staging port-forward svc/livekit-server-metrics 6789:6789
+curl -s localhost:6789/metrics | grep -E '^livekit_(participants|room)_total'
+
+# AlertmanagerConfig wird gepicked? (config sollte in Alertmanager-Status
+# auftauchen)
+kubectl -n monitoring exec -it alertmanager-<...>-0 -- amtool config show
+
+# Test-Alert ausloesen: in einen Meet-Raum joinen, ~30-60s warten,
+# Discord-Channel sollte "neue(r) Teilnehmer" erhalten.
+```
+
+### Caveats
+
+- **Prometheus ist sample-basiert**: bei 15-30s Scrape + Alertmanager
+  groupWait kann ein User der join-en und sofort wieder leaven nicht im
+  Discord auftauchen. Auch werden mehrere Joins in einem Fenster zu einer
+  Meldung zusammengefasst (`+3 neue Teilnehmer` statt drei einzelne Pings).
+  Wenn pro-Event-Notifications kritisch sind: LiveKit-Webhooks (`participant_joined`/
+  `participant_left`) sind das passende Werkzeug, nicht Prometheus.
+- **Discord-Slack-Endpoint**: Discord akzeptiert Slack-Format-Payloads
+  nur unter `<webhook-url>/slack`. Das Manifest haengt das automatisch an;
+  in der `secrets/<env>/monitoring.yaml.gotmpl` die URL OHNE Suffix.
+- **AlertmanagerConfig-Pickup**: Der Alertmanager muss konfiguriert sein,
+  Configs aus dem LiveKit-Namespace zu lesen. Default des kube-prometheus-
+  stack ist oft auf den `monitoring`-NS beschraenkt -- Stack-Values
+  `alertmanager.alertmanagerSpec.alertmanagerConfigNamespaceSelector: {}`
+  oeffnet das auf alle NS.
+- **Vanilla-Prometheus ohne Operator**: dann `monitoring.MANAGED=false`
+  setzen. Die `prometheus.io/scrape`-Annotation am livekit-server-Pod
+  reicht fuer Discovery; Alertmanager-Routing nach Discord muss in der
+  zentralen `alertmanager.yml` haendisch ergaenzt werden.
 
 ## Egress / Aufnahmen
 

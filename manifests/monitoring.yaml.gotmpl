@@ -1,0 +1,252 @@
+resources:
+  # Eigener metrics-only-Service. Das livekit-server-Chart exposed den
+  # Prometheus-Port zwar im Hauptservice, der Port-Name variiert aber
+  # zwischen Chart-Versionen (mal "prometheus", mal "metrics"). Eigener
+  # Service mit fest gewaehltem Port-Name "metrics" macht den Selector im
+  # ServiceMonitor unabhaengig von Chart-Updates.
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-metrics
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        app.kubernetes.io/name: livekit-server
+        app.kubernetes.io/instance: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+        app.kubernetes.io/component: metrics
+    spec:
+      type: ClusterIP
+      # Headless-Service: ServiceMonitor scraped Pod-IPs direkt, der Service
+      # ist nur Endpoint-Discovery-Vehikel, keinen LB-Hop dazwischen.
+      clusterIP: None
+      selector:
+        app.kubernetes.io/name: livekit-server
+        app.kubernetes.io/instance: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+      ports:
+        - name: metrics
+          port: 6789
+          targetPort: 6789
+          protocol: TCP
+
+  # ServiceMonitor (kube-prometheus-stack CRD). Wenn nur Vanilla-Prometheus
+  # mit annotation-discovery laeuft, sind die podAnnotations auf dem
+  # livekit-server-Pod (siehe values/livekit.yaml.gotmpl) bereits ausreichend
+  # -- dann kann monitoring.MANAGED auf false bleiben und nur die Discord-
+  # AlertmanagerConfig + Dashboard separat ausgerollt werden.
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        # kube-prometheus-stack picked nur ServiceMonitors mit dem release-
+        # Label seines Prometheus-CR auf. Welches Label genau das ist haengt
+        # vom Stack-Release ab; per env konfigurierbar.
+        {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_KEY }}: {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_VALUE | quote }}
+        app.kubernetes.io/name: livekit-server
+        app.kubernetes.io/instance: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+    spec:
+      namespaceSelector:
+        matchNames:
+          - {{ .StateValues.deploy.NAMESPACE }}
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: livekit-server
+          app.kubernetes.io/instance: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+          app.kubernetes.io/component: metrics
+      endpoints:
+        - port: metrics
+          path: /metrics
+          interval: {{ .StateValues.monitoring.SCRAPE_INTERVAL | default "15s" }}
+          scrapeTimeout: 10s
+
+  # PrometheusRule: Alerts auf Teilnehmer-Aenderungen + Health-Signale.
+  #
+  # Caveat fuer "neuer User im Raum": Prometheus ist sample-basiert. Bei
+  # 15s-Scrape-Interval und Alertmanager group_wait/group_interval kann es
+  # sein, dass mehrere Joins zu einer Discord-Meldung zusammengefasst
+  # werden, oder ein Join+Leave innerhalb eines Scrape-Tics gar nicht
+  # auffaellt. Wenn pro-Event-Notifications kritisch sind: LiveKit-Webhooks
+  # sind das richtige Werkzeug, nicht Prometheus.
+  - apiVersion: monitoring.coreos.com/v1
+    kind: PrometheusRule
+    metadata:
+      name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_KEY }}: {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_VALUE | quote }}
+    spec:
+      groups:
+        - name: livekit.participants
+          # 30s reicht fuer Teilnehmer-Aenderungen; default 1m wuerde Alerts
+          # zu sehr verzoegern.
+          interval: 30s
+          rules:
+            # livekit_participants_total ist in v1.11 ein Gauge der aktuell
+            # verbundenen Participants pro Node. delta() ueber 1m faengt
+            # den Anstieg seit dem letzten Sample-Fenster.
+            #
+            # > 0 alleine waere genug; max(...) by (node_id) verhindert,
+            # dass parallele Replicas (REPLICA_COUNT > 1 in Prod) jede fuer
+            # sich Alerts ziehen wenn die Summe konstant bleibt.
+            - alert: LiveKitParticipantJoined
+              expr: |
+                sum(delta(livekit_participants_total[1m])) > 0
+              for: 0s
+              labels:
+                severity: info
+                channel: discord
+                kind: join
+              annotations:
+                summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} neue(r) Teilnehmer"
+                description: |
+                  Teilnehmerzahl ist in den letzten 60s um {{`{{ $value | printf "%.0f" }}`}} gestiegen.
+                  Aktuell: {{`{{ with query "sum(livekit_participants_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
+                  Hinweis: Prometheus aggregiert pro Scrape-Fenster -- Einzel-Joins
+                  innerhalb 15s werden zusammengefasst.
+
+            - alert: LiveKitParticipantLeft
+              expr: |
+                sum(delta(livekit_participants_total[1m])) < 0
+              for: 0s
+              labels:
+                severity: info
+                channel: discord
+                kind: leave
+              annotations:
+                summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Teilnehmer weg"
+                description: |
+                  Teilnehmerzahl ist um {{`{{ $value | printf "%.0f" }}`}} gefallen.
+                  Aktuell: {{`{{ with query "sum(livekit_participants_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
+
+            # Sanity: Server lebt aber Metrics-Endpoint scraped nicht mehr.
+            - alert: LiveKitMetricsDown
+              expr: |
+                up{service="{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-metrics"} == 0
+              for: 5m
+              labels:
+                severity: warning
+                channel: discord
+              annotations:
+                summary: "LiveKit-Metrics scraped seit 5m nicht"
+                description: "ServiceMonitor-Target ist down -- vermutlich Pod-Restart oder Port-Naming-Drift."
+
+  # K8s-Secret fuer Discord-Webhook-URL. Wird von der AlertmanagerConfig
+  # via apiURL.name referenziert. AlertmanagerConfig + Secret muessen im
+  # selben Namespace liegen wie der Alertmanager das `alertmanagerConfigSelector`
+  # auswertet -- bei kube-prometheus-stack i.d.R. ueber Cross-Namespace-Selector.
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: livekit-discord-webhook
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        # Manche Stack-Setups fordern dieses Label, damit Alertmanager
+        # Cross-Namespace-Secrets lesen darf. Schadet nicht wenn ungenutzt.
+        {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_KEY }}: {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_VALUE | quote }}
+    type: Opaque
+    stringData:
+      # Discord akzeptiert Slack-Format-Payloads auf <webhook>/slack -- so
+      # kann Alertmanagers slackConfigs-Receiver direkt liefern, ohne
+      # eigenen Bridge-Service. Das /slack-Suffix MUSS dranhaengen, sonst
+      # kommt 400 von Discord.
+      url: {{ printf "%s/slack" (.StateValues.secrets.monitoring.discord_webhook_url | trimSuffix "/" | trimSuffix "/slack") | quote }}
+
+  # AlertmanagerConfig: Routet alle Alerts mit label channel=discord an den
+  # Discord-Webhook. repeatInterval bewusst kurz, damit anhaltende Lasten
+  # erneut pingen; groupInterval haelt Bursts aber zusammen.
+  - apiVersion: monitoring.coreos.com/v1alpha1
+    kind: AlertmanagerConfig
+    metadata:
+      name: livekit-discord
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_KEY }}: {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_VALUE | quote }}
+    spec:
+      route:
+        receiver: discord
+        groupBy: ["alertname", "kind"]
+        # 10s -- Joins innerhalb dieser Spanne in einem Discord-Message
+        # zusammenfassen, damit "5 User joinen gleichzeitig" nicht 5 Pings
+        # ergibt.
+        groupWait: 10s
+        groupInterval: 30s
+        # Wichtig fuer Join/Leave-Events: ohne kurzes repeatInterval wuerde
+        # Alertmanager den (immer noch firenden) Alert nur einmal pro 4h
+        # nochmal posten -- absurde Default fuer Event-artige Alerts.
+        repeatInterval: 1m
+        matchers:
+          - name: channel
+            value: discord
+            matchType: =
+      receivers:
+        - name: discord
+          slackConfigs:
+            - apiURL:
+                name: livekit-discord-webhook
+                key: url
+              channel: "#livekit"  # Discord ignoriert das, bleibt fuer Logs
+              sendResolved: false
+              title: |-
+                {{`{{ .CommonAnnotations.summary }}`}}
+              text: |-
+                {{`{{ range .Alerts -}}
+                **{{ .Annotations.summary }}**
+                {{ .Annotations.description }}
+                {{ end }}`}}
+
+  {{- if eq .StateValues.monitoring.GRAFANA_DASHBOARD true }}
+  # Grafana-Dashboard via Sidecar-ConfigMap-Discovery. Label-Key/-Value
+  # haengt vom Grafana-Helm-Setup ab (default kube-prometheus-stack:
+  # grafana_dashboard=1). Falls dein Stack anderen Selector benutzt:
+  # monitoring.GRAFANA_SIDECAR_LABEL_KEY/VALUE in der env anpassen.
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: livekit-grafana-dashboard
+      namespace: {{ .StateValues.deploy.NAMESPACE }}
+      labels:
+        {{ .StateValues.monitoring.GRAFANA_SIDECAR_LABEL_KEY }}: {{ .StateValues.monitoring.GRAFANA_SIDECAR_LABEL_VALUE | quote }}
+    data:
+      livekit.json: |
+        {
+          "title": "LiveKit",
+          "uid": "livekit-overview",
+          "schemaVersion": 39,
+          "version": 1,
+          "refresh": "15s",
+          "time": {"from": "now-1h", "to": "now"},
+          "panels": [
+            {
+              "id": 1, "type": "stat", "title": "Aktive Teilnehmer",
+              "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+              "targets": [{"expr": "sum(livekit_participants_total)", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"}
+            },
+            {
+              "id": 2, "type": "stat", "title": "Aktive Raeume",
+              "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+              "targets": [{"expr": "sum(livekit_room_total)", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"}
+            },
+            {
+              "id": 3, "type": "stat", "title": "Server-Nodes up",
+              "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+              "targets": [{"expr": "sum(up{service=\"{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-metrics\"})", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"}
+            },
+            {
+              "id": 4, "type": "timeseries", "title": "Teilnehmer ueber Zeit",
+              "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+              "targets": [{"expr": "sum(livekit_participants_total) by (node_id)", "refId": "A", "legendFormat": "{{`{{ node_id }}`}}"}]
+            },
+            {
+              "id": 5, "type": "timeseries", "title": "Joins/Leaves rate (per min)",
+              "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+              "targets": [
+                {"expr": "clamp_min(sum(delta(livekit_participants_total[1m])), 0)", "refId": "A", "legendFormat": "joins"},
+                {"expr": "clamp_max(sum(delta(livekit_participants_total[1m])), 0)", "refId": "B", "legendFormat": "leaves"}
+              ]
+            }
+          ]
+        }
+  {{- end }}
