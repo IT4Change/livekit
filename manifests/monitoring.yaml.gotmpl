@@ -15,8 +15,6 @@ resources:
         app.kubernetes.io/component: metrics
     spec:
       type: ClusterIP
-      # Headless-Service: ServiceMonitor scraped Pod-IPs direkt, der Service
-      # ist nur Endpoint-Discovery-Vehikel, keinen LB-Hop dazwischen.
       clusterIP: None
       selector:
         app.kubernetes.io/name: livekit-server
@@ -27,20 +25,13 @@ resources:
           targetPort: 6789
           protocol: TCP
 
-  # ServiceMonitor (kube-prometheus-stack CRD). Wenn nur Vanilla-Prometheus
-  # mit annotation-discovery laeuft, sind die podAnnotations auf dem
-  # livekit-server-Pod (siehe values/livekit.yaml.gotmpl) bereits ausreichend
-  # -- dann kann monitoring.MANAGED auf false bleiben und nur die Discord-
-  # AlertmanagerConfig + Dashboard separat ausgerollt werden.
+  # ServiceMonitor (kube-prometheus-stack CRD).
   - apiVersion: monitoring.coreos.com/v1
     kind: ServiceMonitor
     metadata:
       name: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
       namespace: {{ .StateValues.deploy.NAMESPACE }}
       labels:
-        # kube-prometheus-stack picked nur ServiceMonitors mit dem release-
-        # Label seines Prometheus-CR auf. Welches Label genau das ist haengt
-        # vom Stack-Release ab; per env konfigurierbar.
         {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_KEY }}: {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_VALUE | quote }}
         app.kubernetes.io/name: livekit-server
         app.kubernetes.io/instance: {{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}
@@ -59,14 +50,19 @@ resources:
           interval: {{ .StateValues.monitoring.SCRAPE_INTERVAL | default "15s" }}
           scrapeTimeout: 10s
 
-  # PrometheusRule: Alerts auf Teilnehmer-Aenderungen + Health-Signale.
+  # PrometheusRule: Teilnehmer-Aenderungen ueber Gauge-Differenz, NICHT
+  # ueber Counter-Increase. Begruendung:
+  #   livekit_participant_join_total ist ein Counter, der JEDEN Connect zaehlt
+  #   inkl. ICE-Reconnects, Page-Reloads und Network-Switches. Praktisch heisst
+  #   das: ein User mit instabilem WLAN erzeugt 5 "Joins" in einer Minute.
+  #   Gauge-Diff (livekit_participant_total jetzt minus offset 1m) misst nur
+  #   die Netto-Aenderung -- Reconnects saldieren sich raus.
   #
-  # Caveat fuer "neuer User im Raum": Prometheus ist sample-basiert. Bei
-  # 15s-Scrape-Interval und Alertmanager group_wait/group_interval kann es
-  # sein, dass mehrere Joins zu einer Discord-Meldung zusammengefasst
-  # werden, oder ein Join+Leave innerhalb eines Scrape-Tics gar nicht
-  # auffaellt. Wenn pro-Event-Notifications kritisch sind: LiveKit-Webhooks
-  # sind das richtige Werkzeug, nicht Prometheus.
+  # for: 30s als Anti-Flap gegen einzelne Sample-Spikes (sonst feuert jeder
+  # Tab-Reload kurzfristig).
+  #
+  # Kein room-Label: LiveKit's Prometheus-Export hat keinen Raum-Bezug
+  # (zu hoch-kardinal). Discord-Message verlinkt die Meet-Landing.
   - apiVersion: monitoring.coreos.com/v1
     kind: PrometheusRule
     metadata:
@@ -77,56 +73,41 @@ resources:
     spec:
       groups:
         - name: livekit.participants
-          # 30s reicht fuer Teilnehmer-Aenderungen; default 1m wuerde Alerts
-          # zu sehr verzoegern.
           interval: 30s
           rules:
-            # Echtes Counter-Metric (in v1.11): zaehlt jeden Join cumulativ
-            # pro Node. increase()[1m] liefert die Anzahl Joins der letzten
-            # 60s. Lossless innerhalb des Scrape-Fensters -- jeder Join
-            # erhoeht den Counter, kein Wackeln durch Gauge-State.
             - alert: LiveKitParticipantJoined
               expr: |
-                sum(increase(livekit_participant_join_total[1m])) > 0
-              for: 0s
+                (sum(livekit_participant_total) - sum(livekit_participant_total offset 1m)) > 0
+              for: 30s
               labels:
                 severity: info
                 channel: discord
                 kind: join
-                # Prometheus-Operator injiziert in unsere AlertmanagerConfig-
-                # Subroute automatisch einen namespace=<config-ns>-Matcher
-                # (Default alertmanagerConfigMatcherStrategy: OnNamespace).
-                # Ohne diesen Label fallen unsere Alerts auf den cluster-
-                # weiten Catch-all (anderer Discord-Webhook).
+                # Pflicht: Operator injiziert namespace=<config-ns>-Matcher
+                # in unsere AMConfig-Subroute (alertmanagerConfigMatcherStrategy:
+                # OnNamespace). Ohne diesen Label match unsere Route nie.
                 namespace: {{ .StateValues.deploy.NAMESPACE }}
               annotations:
-                summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Join(s) in den letzten 60s"
-                description: |
-                  {{`{{ $value | printf "%.0f" }}`}} neue(r) Teilnehmer in den letzten 60s.
-                  Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
-                  Hinweis: Prometheus aggregiert pro Scrape-Fenster -- mehrere Joins
-                  innerhalb der Range zaehlen als ein Alert mit value=N.
+                summary: "Neue(r) Teilnehmer auf {{ .StateValues.deploy.MEET_DOMAIN }}"
+                description: |-
+                  +{{`{{ $value | printf "%.0f" }}`}} in den letzten 60s. Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}.
+                meet_url: "https://{{ .StateValues.deploy.MEET_DOMAIN }}"
 
-            # Leaves haben keinen eigenen Counter im LiveKit-Export. Best-
-            # effort ueber Gauge-Drop: Differenz von sum(livekit_participant_total)
-            # zwischen jetzt und vor 1m. Anfaellig wenn Joins+Leaves im
-            # gleichen Fenster passieren (saldiert sich raus).
             - alert: LiveKitParticipantLeft
               expr: |
                 (sum(livekit_participant_total) - sum(livekit_participant_total offset 1m)) < 0
-              for: 0s
+              for: 30s
               labels:
                 severity: info
                 channel: discord
                 kind: leave
                 namespace: {{ .StateValues.deploy.NAMESPACE }}
               annotations:
-                summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Teilnehmer weg"
-                description: |
-                  Teilnehmerzahl ist im letzten 1m um {{`{{ $value | printf "%.0f" }}`}} gesunken (negativer Wert).
-                  Aktuell: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
+                summary: "Teilnehmer hat {{ .StateValues.deploy.MEET_DOMAIN }} verlassen"
+                description: |-
+                  {{`{{ $value | printf "%.0f" }}`}} in den letzten 60s. Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}.
+                meet_url: "https://{{ .StateValues.deploy.MEET_DOMAIN }}"
 
-            # Sanity: Server lebt aber Metrics-Endpoint scraped nicht mehr.
             - alert: LiveKitMetricsDown
               expr: |
                 up{service="{{ .StateValues.deploy.RELEASE_NAME_LIVEKIT }}-metrics"} == 0
@@ -134,35 +115,32 @@ resources:
               labels:
                 severity: warning
                 channel: discord
+                kind: ops
                 namespace: {{ .StateValues.deploy.NAMESPACE }}
               annotations:
-                summary: "LiveKit-Metrics scraped seit 5m nicht"
+                summary: "{{ .StateValues.deploy.MEET_DOMAIN }}: Metrics scraped seit 5m nicht"
                 description: "ServiceMonitor-Target ist down -- vermutlich Pod-Restart oder Port-Naming-Drift."
+                meet_url: "https://{{ .StateValues.deploy.MEET_DOMAIN }}"
 
   # K8s-Secret fuer Discord-Webhook-URL. Wird von der AlertmanagerConfig
-  # via apiURL.name referenziert. AlertmanagerConfig + Secret muessen im
-  # selben Namespace liegen wie der Alertmanager das `alertmanagerConfigSelector`
-  # auswertet -- bei kube-prometheus-stack i.d.R. ueber Cross-Namespace-Selector.
+  # via apiURL.name referenziert.
   - apiVersion: v1
     kind: Secret
     metadata:
       name: livekit-discord-webhook
       namespace: {{ .StateValues.deploy.NAMESPACE }}
       labels:
-        # Manche Stack-Setups fordern dieses Label, damit Alertmanager
-        # Cross-Namespace-Secrets lesen darf. Schadet nicht wenn ungenutzt.
         {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_KEY }}: {{ .StateValues.monitoring.PROMETHEUS_RELEASE_LABEL_VALUE | quote }}
     type: Opaque
     stringData:
       # Discord akzeptiert Slack-Format-Payloads auf <webhook>/slack -- so
-      # kann Alertmanagers slackConfigs-Receiver direkt liefern, ohne
-      # eigenen Bridge-Service. Das /slack-Suffix MUSS dranhaengen, sonst
-      # kommt 400 von Discord.
+      # kann Alertmanagers slackConfigs-Receiver direkt liefern. /slack-Suffix
+      # MUSS dranhaengen, sonst kommt 400 von Discord. Wir trimmen evtl. vor-
+      # handenes /slack erst weg, damit das Append idempotent ist.
       url: {{ printf "%s/slack" (.StateValues.secrets.monitoring.discord_webhook_url | trimSuffix "/" | trimSuffix "/slack") | quote }}
 
-  # AlertmanagerConfig: Routet alle Alerts mit label channel=discord an den
-  # Discord-Webhook. repeatInterval bewusst kurz, damit anhaltende Lasten
-  # erneut pingen; groupInterval haelt Bursts aber zusammen.
+  # AlertmanagerConfig: routet Alerts mit channel=discord an unseren Webhook.
+  # Username + custom title/message machen die Message kompakt + verlinkbar.
   - apiVersion: monitoring.coreos.com/v1alpha1
     kind: AlertmanagerConfig
     metadata:
@@ -174,15 +152,13 @@ resources:
       route:
         receiver: discord
         groupBy: ["alertname", "kind"]
-        # 10s -- Joins innerhalb dieser Spanne in einem Discord-Message
-        # zusammenfassen, damit "5 User joinen gleichzeitig" nicht 5 Pings
-        # ergibt.
         groupWait: 10s
         groupInterval: 30s
-        # Wichtig fuer Join/Leave-Events: ohne kurzes repeatInterval wuerde
-        # Alertmanager den (immer noch firenden) Alert nur einmal pro 4h
-        # nochmal posten -- absurde Default fuer Event-artige Alerts.
-        repeatInterval: 1m
+        # 5m statt 1m: gauge-diff bleibt 60s lang positiv nach einem Join.
+        # Mit 1m wuerde Alertmanager innerhalb dieses Fensters einen zweiten
+        # Ping schicken. 5m gibt der Resolution Zeit, ohne dass dauerhafte
+        # Anwesenheit gespammt wird.
+        repeatInterval: 5m
         matchers:
           - name: channel
             value: discord
@@ -193,21 +169,21 @@ resources:
             - apiURL:
                 name: livekit-discord-webhook
                 key: url
-              channel: "#livekit"  # Discord ignoriert das, bleibt fuer Logs
+              # Discord's /slack-Endpoint uebernimmt username + iconURL aus
+              # dem Slack-Payload als Bot-Identitaet. Setzt sich ueber den
+              # Webhook-Default-Namen hinweg ("alertmanager" o.ae.).
+              username: {{ .StateValues.monitoring.DISCORD_USERNAME | quote }}
+              channel: "#livekit"  # Discord ignoriert den Channel
               sendResolved: false
               title: |-
-                {{`{{ .CommonAnnotations.summary }}`}}
+                {{`{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}`}}
               text: |-
                 {{`{{ range .Alerts -}}
-                **{{ .Annotations.summary }}**
                 {{ .Annotations.description }}
-                {{ end }}`}}
+                {{ .Annotations.meet_url }}
+                {{ end -}}`}}
 
   {{- if eq .StateValues.monitoring.GRAFANA_DASHBOARD true }}
-  # Grafana-Dashboard via Sidecar-ConfigMap-Discovery. Label-Key/-Value
-  # haengt vom Grafana-Helm-Setup ab (default kube-prometheus-stack:
-  # grafana_dashboard=1). Falls dein Stack anderen Selector benutzt:
-  # monitoring.GRAFANA_SIDECAR_LABEL_KEY/VALUE in der env anpassen.
   - apiVersion: v1
     kind: ConfigMap
     metadata:
@@ -249,10 +225,10 @@ resources:
               "targets": [{"expr": "sum(livekit_participant_total) by (node_id)", "refId": "A", "legendFormat": "{{`{{ node_id }}`}}"}]
             },
             {
-              "id": 5, "type": "timeseries", "title": "Joins per minute",
+              "id": 5, "type": "timeseries", "title": "Connect-Events (inkl. Reconnects) per minute",
               "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
               "targets": [
-                {"expr": "sum(rate(livekit_participant_join_total[1m])) * 60", "refId": "A", "legendFormat": "joins/min"}
+                {"expr": "sum(rate(livekit_participant_join_total[1m])) * 60", "refId": "A", "legendFormat": "connects/min"}
               ]
             }
           ]

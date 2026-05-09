@@ -81,3 +81,8 @@ monitoring:
   GRAFANA_DASHBOARD: true
   GRAFANA_SIDECAR_LABEL_KEY: grafana_dashboard
   GRAFANA_SIDECAR_LABEL_VALUE: "1"
+  # Discord-Bot-Anzeigename. Wird im Slack-Payload als username:-Feld an
+  # Discord's /slack-Endpoint gesendet, dort als Bot-Identitaet verwendet.
+  # Pro env getrennt halten (Stage vs Prod), sonst sieht man nicht woher
+  # ein Alert kommt.
+  DISCORD_USERNAME: "Meet Stage"

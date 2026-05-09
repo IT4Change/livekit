@@ -175,87 +175,130 @@ Issuance wieder auf `letsencrypt-prod` flippen und syncen.
 LiveKit-Server exposed Prometheus-Metriken auf Port `6789`. Das `monitoring`-
 Release rollt darauf auf:
 
-- **Service** `livekit-server-metrics` (headless) -- expose Port `:6789`
-  mit fest gewaehltem Port-Name `metrics`, unabhaengig vom Chart-Naming
+- **Service** `livekit-server-metrics` (headless) -- expose `:6789` mit
+  fest gewaehltem Port-Name `metrics`, unabhaengig vom Chart-Naming
 - **ServiceMonitor** -- kube-prometheus-stack Discovery
-- **PrometheusRule** -- Alerts auf Teilnehmer-Aenderungen + Metrics-Down
-- **Secret** `livekit-discord-webhook` -- Discord-Webhook URL
-- **AlertmanagerConfig** -- routet Alerts mit `channel=discord` an Discord
-  via slackConfigs (Discord akzeptiert Slack-Format auf `<webhook>/slack`)
+- **PrometheusRule** -- Alerts auf Teilnehmer-Aenderungen via Gauge-Diff
+  (`livekit_participant_total` vs. offset 1m). Counter-basierte Joins
+  bewusst nicht: zaehlt jeden ICE-Reconnect/Reload als Join.
+- **Secret** `livekit-discord-webhook` -- Webhook-URL mit auto-angehaengtem
+  /slack-Suffix
+- **AlertmanagerConfig** -- routet `channel=discord` an Discord via
+  slackConfigs (Discord nimmt Slack-Format auf `<webhook>/slack` an)
 - **ConfigMap** `livekit-grafana-dashboard` -- Sidecar-Discovery, optional
 
 ### Voraussetzungen
 
 - kube-prometheus-stack im Cluster (`monitoring.coreos.com/v1` und
   `v1alpha1` CRDs vorhanden)
-- Alertmanager mit Cross-Namespace-Selektor fuer `AlertmanagerConfig`,
-  d.h. `alertmanagerConfigSelector` und `alertmanagerConfigNamespaceSelector`
-  am `Alertmanager`-CR matchen `livekit-staging` / `livekit`
-- Optional: Grafana mit Dashboard-Sidecar (`sidecar.dashboards.enabled=true`,
-  `searchNamespace=ALL` oder explizit den LiveKit-NS gelistet)
+- Alertmanager mit Cross-Namespace-Selektor: `alertmanagerConfigSelector`
+  und `alertmanagerConfigNamespaceSelector` am `Alertmanager`-CR offen
+  (z.B. `{}`) damit unsere AMConfig aus `livekit-staging`/`livekit`
+  gepicked wird
+- Optional: Grafana mit Dashboard-Sidecar
 
 ### Setup
 
 ```sh
 # 1. Discord-Webhook in deinem Discord-Server anlegen
 #    Server-Settings -> Integrations -> Webhooks -> New Webhook
-#    URL kopieren (OHNE /slack-Suffix -- das Manifest haengt es selber an)
+#    Webhook-Name beliebig (wird ueberschrieben durch monitoring.DISCORD_USERNAME).
+#    URL kopieren (OHNE /slack-Suffix -- das Manifest haengt es selbst an).
 
-# 2. Secret-File anlegen + verschluesseln
+# 2. Bot-Anzeigename pro env in environments/<env>.yaml.gotmpl setzen:
+#    monitoring.DISCORD_USERNAME: "Meet Stage" / "Meet"
+
+# 3. Secret-File anlegen + verschluesseln
 cp secrets/default/monitoring.yaml.gotmpl.example secrets/default/monitoring.yaml.gotmpl
 $EDITOR secrets/default/monitoring.yaml.gotmpl
 sops -e -i secrets/default/monitoring.yaml.gotmpl
 
-# 3. Release-Label des kube-prometheus-stack pruefen
+# 4. Release-Label des kube-prometheus-stack pruefen
 kubectl get prometheus -A -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.serviceMonitorSelector}{"\n"}{end}'
-# Falls Selector nicht "release: kube-prometheus-stack" ist:
+# Falls Selector nicht "release: prometheus" ist:
 # environments/default.yaml.gotmpl -> monitoring.PROMETHEUS_RELEASE_LABEL_*
-# anpassen.
 
-# 4. Deploy
+# 5. Deploy
 helmfile -e default sync
 ```
 
 ### Smoketest
 
 ```sh
-# ServiceMonitor wird gepicked?
-kubectl -n livekit-staging get servicemonitor
-# Target im Prometheus-UI: <prom-host>/targets -- erwartet up=1 fuer
-# serviceMonitor/livekit-staging/livekit-server/0
+# ServiceMonitor + AMConfig angekommen?
+kubectl -n livekit-staging get servicemonitor,prometheusrule,alertmanagerconfig
 
-# Direktes Curl auf den Metrics-Endpoint
-kubectl -n livekit-staging port-forward svc/livekit-server-metrics 6789:6789
-curl -s localhost:6789/metrics | grep -E '^livekit_(participants|room)_total'
+# Prometheus-Target up?
+kubectl -n monitoring port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 &
+curl -s 'http://localhost:9090/api/v1/targets' | jq '.data.activeTargets[] | select(.labels.namespace=="livekit-staging") | {health}'
+kill %1
 
-# AlertmanagerConfig wird gepicked? (config sollte in Alertmanager-Status
-# auftauchen)
-kubectl -n monitoring exec -it alertmanager-<...>-0 -- amtool config show
-
-# Test-Alert ausloesen: in einen Meet-Raum joinen, ~30-60s warten,
-# Discord-Channel sollte "neue(r) Teilnehmer" erhalten.
+# In einen Meet-Raum joinen, 30-60s warten.
+# Erwartet: Discord-Ping, Bot-Name "Meet Stage", Body mit Meet-URL.
 ```
+
+### Doppelte Pings ausschalten
+
+Der Prometheus-Operator setzt auf alle AMConfig-Subrouten hardcoded
+`continue: true`. Effekt: Alert geht an unsere LiveKit-Discord-Route
+(richtig), faellt aber durch auf den cluster-weiten Catch-all -> zweiter
+Ping auf den allgemeinen Cluster-Discord.
+
+Fix im cluster-weiten kube-prometheus-stack-values, **nach** den
+bestehenden null-Routen ergaenzen:
+
+```yaml
+alertmanager:
+  config:
+    route:
+      routes:
+        - match: { alertname: KubeProxyDown }
+          receiver: "null"
+        # ... bestehende null-Routen ...
+        - match: { severity: none }
+          receiver: "null"
+        # NEU: Fallthrough fuer LiveKit unterdruecken. Funktioniert nur
+        # wenn der Operator AMConfig-Routen vor hand-written sortiert
+        # (≥ Operator 0.74 / kube-prometheus-stack ≥ 50). Pruefbar via:
+        #   kubectl -n monitoring get secret alertmanager-prometheus-kube-prometheus-alertmanager-generated \
+        #     -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip
+        # -> die operator-injected Subroute mit matchers: ['namespace="livekit-staging"']
+        #    muss vor den hand-written Subrouten erscheinen.
+        - match: { namespace: livekit-staging }
+          receiver: "null"
+        - match: { namespace: livekit }
+          receiver: "null"
+```
+
+Falls Operator-Routen NACH hand-written sortieren (alte Operator-Version),
+wuerde diese Null-Route die LiveKit-Alerts vor unserer AMConfig abfangen.
+In dem Fall ist die einzig saubere Loesung, das Routing komplett im
+cluster-Config zu pflegen (Receiver dort, AMConfig hier weg).
 
 ### Caveats
 
-- **Prometheus ist sample-basiert**: bei 15-30s Scrape + Alertmanager
-  groupWait kann ein User der join-en und sofort wieder leaven nicht im
-  Discord auftauchen. Auch werden mehrere Joins in einem Fenster zu einer
-  Meldung zusammengefasst (`+3 neue Teilnehmer` statt drei einzelne Pings).
-  Wenn pro-Event-Notifications kritisch sind: LiveKit-Webhooks (`participant_joined`/
-  `participant_left`) sind das passende Werkzeug, nicht Prometheus.
-- **Discord-Slack-Endpoint**: Discord akzeptiert Slack-Format-Payloads
-  nur unter `<webhook-url>/slack`. Das Manifest haengt das automatisch an;
-  in der `secrets/<env>/monitoring.yaml.gotmpl` die URL OHNE Suffix.
-- **AlertmanagerConfig-Pickup**: Der Alertmanager muss konfiguriert sein,
-  Configs aus dem LiveKit-Namespace zu lesen. Default des kube-prometheus-
-  stack ist oft auf den `monitoring`-NS beschraenkt -- Stack-Values
+- **Reconnects/Page-Reloads**: Counter `livekit_participant_join_total`
+  zaehlt jeden Connect (ICE-Reconnect, Tab-Reload, Network-Switch).
+  Deshalb alerten wir auf Gauge-Diff -- das misst Netto-Aenderung, nicht
+  Connect-Events. Ein User mit drei parallelen Tabs zaehlt trotzdem als 3.
+- **Kein Raum-Bezug**: `livekit_participant_total` hat keinen `room`-Label
+  (zu hoch-kardinal). Discord-Message verlinkt die Meet-Landing, nicht
+  den konkreten Raum. Pro-Raum-Notifications waere LiveKit-Webhook-Pfad.
+- **Anti-Flap**: Alert hat `for: 30s`. Spikes unter 30s feuern nicht.
+  Absicht (sonst Reconnect-Storm = Push-Storm).
+- **Bot-Name "alertmanager"**: passiert wenn `monitoring.DISCORD_USERNAME`
+  leer ist oder das Secret-File nicht im Slack-Format-Endpoint landet.
+  `username:` im slackConfigs setzt das Discord-Bot-Namensfeld via
+  Slack-Payload.
+- **AMConfig-Pickup**: Der Alertmanager muss configs aus dem LiveKit-NS
+  lesen duerfen. Default des kube-prometheus-stack ist oft auf den
+  `monitoring`-NS beschraenkt -- Stack-Values
   `alertmanager.alertmanagerSpec.alertmanagerConfigNamespaceSelector: {}`
   oeffnet das auf alle NS.
-- **Vanilla-Prometheus ohne Operator**: dann `monitoring.MANAGED=false`
-  setzen. Die `prometheus.io/scrape`-Annotation am livekit-server-Pod
-  reicht fuer Discovery; Alertmanager-Routing nach Discord muss in der
-  zentralen `alertmanager.yml` haendisch ergaenzt werden.
+- **Vanilla-Prometheus ohne Operator**: `monitoring.MANAGED=false` setzen,
+  dann reicht die `prometheus.io/scrape`-Annotation am livekit-server-Pod;
+  Routing nach Discord in der zentralen `alertmanager.yml` haendisch
+  ergaenzen.
 
 ## Egress / Aufnahmen
 
