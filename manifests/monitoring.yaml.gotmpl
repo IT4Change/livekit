@@ -81,32 +81,33 @@ resources:
           # zu sehr verzoegern.
           interval: 30s
           rules:
-            # livekit_participants_total ist in v1.11 ein Gauge der aktuell
-            # verbundenen Participants pro Node. delta() ueber 1m faengt
-            # den Anstieg seit dem letzten Sample-Fenster.
-            #
-            # > 0 alleine waere genug; max(...) by (node_id) verhindert,
-            # dass parallele Replicas (REPLICA_COUNT > 1 in Prod) jede fuer
-            # sich Alerts ziehen wenn die Summe konstant bleibt.
+            # Echtes Counter-Metric (in v1.11): zaehlt jeden Join cumulativ
+            # pro Node. increase()[1m] liefert die Anzahl Joins der letzten
+            # 60s. Lossless innerhalb des Scrape-Fensters -- jeder Join
+            # erhoeht den Counter, kein Wackeln durch Gauge-State.
             - alert: LiveKitParticipantJoined
               expr: |
-                sum(delta(livekit_participants_total[1m])) > 0
+                sum(increase(livekit_participant_join_total[1m])) > 0
               for: 0s
               labels:
                 severity: info
                 channel: discord
                 kind: join
               annotations:
-                summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} neue(r) Teilnehmer"
+                summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Join(s) in den letzten 60s"
                 description: |
-                  Teilnehmerzahl ist in den letzten 60s um {{`{{ $value | printf "%.0f" }}`}} gestiegen.
-                  Aktuell: {{`{{ with query "sum(livekit_participants_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
-                  Hinweis: Prometheus aggregiert pro Scrape-Fenster -- Einzel-Joins
-                  innerhalb 15s werden zusammengefasst.
+                  {{`{{ $value | printf "%.0f" }}`}} neue(r) Teilnehmer in den letzten 60s.
+                  Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
+                  Hinweis: Prometheus aggregiert pro Scrape-Fenster -- mehrere Joins
+                  innerhalb der Range zaehlen als ein Alert mit value=N.
 
+            # Leaves haben keinen eigenen Counter im LiveKit-Export. Best-
+            # effort ueber Gauge-Drop: Differenz von sum(livekit_participant_total)
+            # zwischen jetzt und vor 1m. Anfaellig wenn Joins+Leaves im
+            # gleichen Fenster passieren (saldiert sich raus).
             - alert: LiveKitParticipantLeft
               expr: |
-                sum(delta(livekit_participants_total[1m])) < 0
+                (sum(livekit_participant_total) - sum(livekit_participant_total offset 1m)) < 0
               for: 0s
               labels:
                 severity: info
@@ -115,8 +116,8 @@ resources:
               annotations:
                 summary: "LiveKit: {{`{{ $value | printf \"%.0f\" }}`}} Teilnehmer weg"
                 description: |
-                  Teilnehmerzahl ist um {{`{{ $value | printf "%.0f" }}`}} gefallen.
-                  Aktuell: {{`{{ with query "sum(livekit_participants_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
+                  Teilnehmerzahl ist im letzten 1m um {{`{{ $value | printf "%.0f" }}`}} gesunken (negativer Wert).
+                  Aktuell: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}
 
             # Sanity: Server lebt aber Metrics-Endpoint scraped nicht mehr.
             - alert: LiveKitMetricsDown
@@ -219,7 +220,7 @@ resources:
             {
               "id": 1, "type": "stat", "title": "Aktive Teilnehmer",
               "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-              "targets": [{"expr": "sum(livekit_participants_total)", "refId": "A"}],
+              "targets": [{"expr": "sum(livekit_participant_total)", "refId": "A"}],
               "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"}
             },
             {
@@ -237,14 +238,13 @@ resources:
             {
               "id": 4, "type": "timeseries", "title": "Teilnehmer ueber Zeit",
               "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-              "targets": [{"expr": "sum(livekit_participants_total) by (node_id)", "refId": "A", "legendFormat": "{{`{{ node_id }}`}}"}]
+              "targets": [{"expr": "sum(livekit_participant_total) by (node_id)", "refId": "A", "legendFormat": "{{`{{ node_id }}`}}"}]
             },
             {
-              "id": 5, "type": "timeseries", "title": "Joins/Leaves rate (per min)",
+              "id": 5, "type": "timeseries", "title": "Joins per minute",
               "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
               "targets": [
-                {"expr": "clamp_min(sum(delta(livekit_participants_total[1m])), 0)", "refId": "A", "legendFormat": "joins"},
-                {"expr": "clamp_max(sum(delta(livekit_participants_total[1m])), 0)", "refId": "B", "legendFormat": "leaves"}
+                {"expr": "sum(rate(livekit_participant_join_total[1m])) * 60", "refId": "A", "legendFormat": "joins/min"}
               ]
             }
           ]
