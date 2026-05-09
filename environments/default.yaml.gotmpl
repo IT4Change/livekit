@@ -69,8 +69,12 @@ monitoring:
   # ServiceMonitors und (Cross-Namespace-)Configs erkennen. Bei kube-
   # prometheus-stack ueblich: release=<Release-Name des Stacks>. Pruefen
   # mit: kubectl get prometheus -A -o jsonpath='{.items[*].spec.serviceMonitorSelector}'
+  # Pruefen mit:
+  #   kubectl get prometheus -A -o jsonpath='{.items[*].spec.serviceMonitorSelector}'
+  # Hier im Cluster: matchLabels.release=prometheus (kube-prometheus-stack
+  # wurde unter Release-Name "prometheus" installiert).
   PROMETHEUS_RELEASE_LABEL_KEY: release
-  PROMETHEUS_RELEASE_LABEL_VALUE: kube-prometheus-stack
+  PROMETHEUS_RELEASE_LABEL_VALUE: prometheus
   SCRAPE_INTERVAL: 15s
   # true = Grafana-Dashboard als ConfigMap mit Sidecar-Label ausrollen.
   # Setzt voraus, dass Grafana mit sidecar.dashboards.enabled=true laeuft.
