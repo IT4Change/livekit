@@ -50,16 +50,21 @@ resources:
           interval: {{ .StateValues.monitoring.SCRAPE_INTERVAL | default "15s" }}
           scrapeTimeout: 10s
 
-  # PrometheusRule: Teilnehmer-Aenderungen ueber Gauge-Differenz, NICHT
-  # ueber Counter-Increase. Begruendung:
+  # PrometheusRule: Teilnehmer-Aenderungen ueber Gauge-Differenz als TRIGGER.
+  # Begruendung:
   #   livekit_participant_join_total ist ein Counter, der JEDEN Connect zaehlt
   #   inkl. ICE-Reconnects, Page-Reloads und Network-Switches. Praktisch heisst
   #   das: ein User mit instabilem WLAN erzeugt 5 "Joins" in einer Minute.
   #   Gauge-Diff (livekit_participant_total jetzt minus offset 1m) misst nur
   #   die Netto-Aenderung -- Reconnects saldieren sich raus.
   #
-  # for: 30s als Anti-Flap gegen einzelne Sample-Spikes (sonst feuert jeder
-  # Tab-Reload kurzfristig).
+  # Anzeige NICHT ueber $value (die Diff), sondern ueber
+  # max_over_time(sum(livekit_participant_total)[2m:]) als "Aktuell verbunden".
+  # Grund: Alertmanager dispatcht den Discord-Ping nur EINMAL pro Firing-
+  # Fenster (groupWait + repeatInterval > 60s, das Firing-Fenster der Diff).
+  # $value zum Dispatch-Zeitpunkt ist die Diff zu genau einem Sample-Punkt --
+  # bei seriell joinenden Usern (>30s auseinander) immer "1". Peak ueber
+  # 2min faengt den realen aktuellen Stand zuverlaessig.
   #
   # Kein room-Label: LiveKit's Prometheus-Export hat keinen Raum-Bezug
   # (zu hoch-kardinal). Discord-Message verlinkt die Meet-Landing.
@@ -95,7 +100,7 @@ resources:
               annotations:
                 summary: "Neue(r) Teilnehmer auf {{ .StateValues.deploy.MEET_DOMAIN }}"
                 description: |-
-                  +{{`{{ $value | printf "%.0f" }}`}} in den letzten 60s. Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}.
+                  Aktuell verbunden: {{`{{ with query "max_over_time(sum(livekit_participant_total)[2m:])" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}.
                 meet_url: "https://{{ .StateValues.deploy.MEET_DOMAIN }}"
 
             - alert: LiveKitParticipantLeft
@@ -109,7 +114,7 @@ resources:
               annotations:
                 summary: "Teilnehmer hat {{ .StateValues.deploy.MEET_DOMAIN }} verlassen"
                 description: |-
-                  {{`{{ $value | printf "%.0f" }}`}} in den letzten 60s. Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}.
+                  Aktuell verbunden: {{`{{ with query "sum(livekit_participant_total)" }}{{ . | first | value | printf "%.0f" }}{{ end }}`}}.
                 meet_url: "https://{{ .StateValues.deploy.MEET_DOMAIN }}"
 
             - alert: LiveKitMetricsDown
@@ -156,7 +161,14 @@ resources:
       route:
         receiver: discord
         groupBy: ["alertname", "kind"]
-        groupWait: 10s
+        # 30s statt 10s: Alertmanager dispatcht den Ping erst, wenn die
+        # Gauge einen typischen Join-Burst (mehrere User innerhalb weniger
+        # Sekunden) eingesammelt hat. Bei 10s wuerde der erste Sample-Tick
+        # nach dem ersten Join dispatchen -- die Annotation zeigt dann nur
+        # den Stand zu diesem Tick, nicht die volle Gruppe. 30s liegt unter
+        # dem ~60s Firing-Fenster der Diff-Expression, der Ping erfolgt also
+        # noch innerhalb des aktiven Alerts.
+        groupWait: 30s
         groupInterval: 30s
         # 5m statt 1m: gauge-diff bleibt 60s lang positiv nach einem Join.
         # Mit 1m wuerde Alertmanager innerhalb dieses Fensters einen zweiten
